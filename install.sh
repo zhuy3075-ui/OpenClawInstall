@@ -920,32 +920,32 @@ setup_ai_provider() {
     echo -e "${CYAN}============================================================${NC}"
     echo ""
     echo -e "${CYAN}主流服务商：${NC}"
-    echo "  1) Anthropic Claude"
-    echo "  2) OpenAI GPT"
-    echo "  3) DeepSeek"
-    echo "  4) Kimi (Moonshot)"
-    echo "  5) Google Gemini"
+    echo "  1) Anthropic Claude（克劳德）"
+    echo "  2) OpenAI GPT（OpenAI）"
+    echo "  3) DeepSeek（深度求索）"
+    echo "  4) Kimi（Moonshot）"
+    echo "  5) Google Gemini（双子）"
     echo ""
     echo -e "${CYAN}多模型网关：${NC}"
-    echo "  6) OpenRouter"
-    echo "  7) OpenCode"
+    echo "  6) OpenRouter（聚合网关）"
+    echo "  7) OpenCode（聚合网关）"
     echo ""
     echo -e "${CYAN}快速推理：${NC}"
-    echo "  8) Groq"
-    echo "  9) Mistral AI"
+    echo "  8) Groq（高速推理）"
+    echo "  9) Mistral AI（米斯特拉尔）"
     echo ""
     echo -e "${CYAN}本地 / 企业：${NC}"
-    echo " 10) Ollama"
-    echo " 11) Azure OpenAI"
+    echo " 10) Ollama（本地模型）"
+    echo " 11) Azure OpenAI（企业版）"
     echo ""
     echo -e "${CYAN}国产 / 其他：${NC}"
-    echo " 12) xAI Grok"
-    echo " 13) Zai GLM"
-    echo " 14) MiniMax"
+    echo " 12) xAI Grok（马斯克）"
+    echo " 13) Z.ai GLM（智谱）"
+    echo " 14) MiniMax（稀宇）"
     echo ""
     echo -e "${CYAN}实验性：${NC}"
-    echo " 15) Google Gemini CLI"
-    echo " 16) Google Antigravity"
+    echo " 15) Google Gemini CLI（实验）"
+    echo " 16) Google Antigravity（实验）"
     echo ""
 
     BASE_URL=""
@@ -961,14 +961,14 @@ setup_ai_provider() {
             AI_PROVIDER="anthropic"
             echo -en "${YELLOW}Custom API Base URL (optional): ${NC}"; read BASE_URL < "$TTY_INPUT"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: claude-sonnet-4-5-20250929): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: claude-sonnet-4-5-20250929，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"claude-sonnet-4-5-20250929"}
             ;;
         2)
             AI_PROVIDER="openai"
             echo -en "${YELLOW}Custom API Base URL (optional): ${NC}"; read BASE_URL < "$TTY_INPUT"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: gpt-5): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gpt-5，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gpt-5"}
             if [ -n "$BASE_URL" ]; then
                 echo -en "${YELLOW}API type [openai-responses/openai-completions] (default: openai-completions): ${NC}"; read AI_API_TYPE < "$TTY_INPUT"
@@ -980,7 +980,7 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Base URL (default: https://api.deepseek.com): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://api.deepseek.com"}
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: deepseek-chat): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: deepseek-chat，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"deepseek-chat"}
             ;;
         4)
@@ -988,14 +988,14 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Base URL (default: https://api.moonshot.cn/v1): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://api.moonshot.cn/v1"}
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: moonshot-v1-auto): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: moonshot-v1-auto，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"moonshot-v1-auto"}
             ;;
         5)
             AI_PROVIDER="google"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}Custom API Base URL (optional): ${NC}"; read BASE_URL < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: gemini-2.0-flash): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gemini-2.0-flash，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gemini-2.0-flash"}
             ;;
         6)
@@ -1003,7 +1003,7 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}API Base URL (default: https://openrouter.ai/api/v1): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://openrouter.ai/api/v1"}
-            echo -en "${YELLOW}Model (default: anthropic/claude-sonnet-4): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: anthropic/claude-sonnet-4，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"anthropic/claude-sonnet-4"}
             ;;
         7)
@@ -1011,7 +1011,7 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}API Base URL (default: https://api.opencode.ai/v1): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://api.opencode.ai/v1"}
-            echo -en "${YELLOW}Model (default: gpt-5): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gpt-5，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gpt-5"}
             ;;
         8)
@@ -1019,7 +1019,7 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}API Base URL (default: https://api.groq.com/openai/v1): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://api.groq.com/openai/v1"}
-            echo -en "${YELLOW}Model (default: llama-3.3-70b-versatile): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: llama-3.3-70b-versatile，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"llama-3.3-70b-versatile"}
             ;;
         9)
@@ -1027,7 +1027,7 @@ setup_ai_provider() {
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}API Base URL (default: https://api.mistral.ai/v1): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"https://api.mistral.ai/v1"}
-            echo -en "${YELLOW}Model (default: mistral-large-latest): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: mistral-large-latest，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"mistral-large-latest"}
             ;;
         10)
@@ -1035,27 +1035,27 @@ setup_ai_provider() {
             AI_KEY=""
             echo -en "${YELLOW}Ollama URL (default: http://localhost:11434): ${NC}"; read BASE_URL < "$TTY_INPUT"
             BASE_URL=${BASE_URL:-"http://localhost:11434"}
-            echo -en "${YELLOW}Model (default: llama3): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: llama3，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"llama3"}
             ;;
         11)
             AI_PROVIDER="azure-openai"
             echo -en "${YELLOW}Azure OpenAI Base URL: ${NC}"; read BASE_URL < "$TTY_INPUT"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: gpt-4o-mini): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gpt-4o-mini，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gpt-4o-mini"}
             AI_API_TYPE="openai-completions"
             ;;
         12)
             AI_PROVIDER="xai"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: grok-4-fast): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: grok-4-fast，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"grok-4-fast"}
             ;;
         13)
             AI_PROVIDER="zai"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: glm-4.7): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: glm-4.7，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"glm-4.7"}
             ;;
         14)
@@ -1065,19 +1065,19 @@ setup_ai_provider() {
                 y|Y|yes|YES) AI_PROVIDER="minimax-cn" ;;
             esac
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: MiniMax-M2.1): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: MiniMax-M2.1，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"MiniMax-M2.1"}
             ;;
         15)
             AI_PROVIDER="google-gemini-cli"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: gemini-2.5-flash): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gemini-2.5-flash，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gemini-2.5-flash"}
             ;;
         16)
             AI_PROVIDER="google-antigravity"
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
-            echo -en "${YELLOW}Model (default: gemini-2.5-flash): ${NC}"; read AI_MODEL < "$TTY_INPUT"
+            echo -en "${YELLOW}模型 ID（默认: gemini-2.5-flash，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"gemini-2.5-flash"}
             ;;
         *)
@@ -1092,7 +1092,11 @@ setup_ai_provider() {
     log_info "AI 提供商配置完成"
     echo -e "  提供商: ${WHITE}$AI_PROVIDER${NC}"
     echo -e "  模型: ${WHITE}$AI_MODEL${NC}"
-    [ -n "$BASE_URL" ] && echo -e "  API 地址: ${WHITE}$BASE_URL${NC}"
+    if [ -n "$BASE_URL" ]; then
+        echo -e "  API 地址: ${WHITE}$BASE_URL${NC}"
+    fi
+
+    return 0
 }
 
 # ================================ API 连接测试 ================================
