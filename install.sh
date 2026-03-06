@@ -883,10 +883,10 @@ run_onboard_wizard() {
     
     # AI 配置
     if [ "$skip_ai_config" = false ]; then
-        setup_ai_provider
+        setup_ai_provider || { log_error "AI 模型配置失败"; return 1; }
         # 先配置 OpenClaw（设置环境变量和自定义 provider），然后再测试
-        configure_openclaw_model
-        test_api_connection
+        configure_openclaw_model || { log_error "写入模型配置失败"; return 1; }
+        test_api_connection || { log_warn "API 测试未通过，可稍后重试"; }
     else
         # 即使跳过配置，也可选择测试连接
         if confirm "是否测试现有 API 连接？" "y"; then
@@ -913,34 +913,34 @@ run_onboard_wizard() {
 setup_ai_provider() {
     echo ""
     echo -e "${CYAN}============================================================${NC}"
-    echo -e "${WHITE}  Step 1: Choose AI Model Provider${NC}"
+    echo -e "${WHITE}  第 1 步：选择 AI 模型提供商${NC}"
     echo -e "${CYAN}============================================================${NC}"
     echo ""
-    echo -e "${CYAN}Main Providers:${NC}"
+    echo -e "${CYAN}主流服务商：${NC}"
     echo "  1) Anthropic Claude"
     echo "  2) OpenAI GPT"
     echo "  3) DeepSeek"
     echo "  4) Kimi (Moonshot)"
     echo "  5) Google Gemini"
     echo ""
-    echo -e "${CYAN}Multi-model Gateway:${NC}"
+    echo -e "${CYAN}多模型网关：${NC}"
     echo "  6) OpenRouter"
     echo "  7) OpenCode"
     echo ""
-    echo -e "${CYAN}Fast Inference:${NC}"
+    echo -e "${CYAN}快速推理：${NC}"
     echo "  8) Groq"
     echo "  9) Mistral AI"
     echo ""
-    echo -e "${CYAN}Local / Enterprise:${NC}"
+    echo -e "${CYAN}本地 / 企业：${NC}"
     echo " 10) Ollama"
     echo " 11) Azure OpenAI"
     echo ""
-    echo -e "${CYAN}CN / Others:${NC}"
+    echo -e "${CYAN}国产 / 其他：${NC}"
     echo " 12) xAI Grok"
     echo " 13) Zai GLM"
     echo " 14) MiniMax"
     echo ""
-    echo -e "${CYAN}Experimental:${NC}"
+    echo -e "${CYAN}实验性：${NC}"
     echo " 15) Google Gemini CLI"
     echo " 16) Google Antigravity"
     echo ""
@@ -950,7 +950,7 @@ setup_ai_provider() {
     AI_KEY=""
     AI_MODEL=""
 
-    echo -en "${YELLOW}Choose provider [1-16] (default: 1): ${NC}"; read ai_choice < "$TTY_INPUT"
+    echo -en "${YELLOW}请选择提供商 [1-16]（默认: 1）：${NC}"; read ai_choice < "$TTY_INPUT"
     ai_choice=${ai_choice:-1}
 
     case $ai_choice in
@@ -1086,10 +1086,10 @@ setup_ai_provider() {
     esac
 
     echo ""
-    log_info "AI Provider configured"
-    echo -e "  Provider: ${WHITE}$AI_PROVIDER${NC}"
-    echo -e "  Model: ${WHITE}$AI_MODEL${NC}"
-    [ -n "$BASE_URL" ] && echo -e "  API URL: ${WHITE}$BASE_URL${NC}"
+    log_info "AI 提供商配置完成"
+    echo -e "  提供商: ${WHITE}$AI_PROVIDER${NC}"
+    echo -e "  模型: ${WHITE}$AI_MODEL${NC}"
+    [ -n "$BASE_URL" ] && echo -e "  API 地址: ${WHITE}$BASE_URL${NC}"
 }
 
 # ================================ API 连接测试 ================================
