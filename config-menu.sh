@@ -54,6 +54,7 @@ CONFIG_DIR="$HOME/.openclaw"
 
 # OpenClaw 环境变量配置
 OPENCLAW_ENV="$CONFIG_DIR/env"
+OPENCLAW_DOTENV="$CONFIG_DIR/.env"
 OPENCLAW_JSON="$CONFIG_DIR/openclaw.json"
 BACKUP_DIR="$CONFIG_DIR/backups"
 
@@ -233,6 +234,19 @@ get_env_value() {
     fi
 }
 
+# Clear cached provider vars in current shell before loading ~/.openclaw/env.
+clear_ai_env_vars() {
+    unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
+    unset OPENAI_API_KEY OPENAI_BASE_URL
+    unset DEEPSEEK_API_KEY DEEPSEEK_BASE_URL
+    unset MOONSHOT_API_KEY MOONSHOT_BASE_URL
+    unset GOOGLE_API_KEY GOOGLE_BASE_URL
+    unset GROQ_API_KEY GROQ_BASE_URL
+    unset MISTRAL_API_KEY MISTRAL_BASE_URL
+    unset OPENROUTER_API_KEY OPENROUTER_BASE_URL
+    unset XAI_API_KEY ZAI_API_KEY MINIMAX_API_KEY
+}
+
 # ================================ 测试功能 ================================
 
 # 检查 OpenClaw 是否已安装
@@ -254,9 +268,24 @@ restart_gateway_for_channel() {
     echo -e "${YELLOW}检查配置...${NC}"
     yes | openclaw doctor --fix > /dev/null 2>&1 || true
     
-    # 使用官方 restart 命令
-    local restart_output
-    restart_output=$(openclaw gateway restart 2>&1) || true
+    # 显式注入 env 后重启，避免后台进程读取不到 API Key
+    local restart_output=""
+    openclaw gateway stop > /dev/null 2>&1 || true
+    sleep 1
+    if command -v setsid &> /dev/null; then
+        if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+            setsid bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+        else
+            setsid openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+        fi
+    else
+        if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+            nohup bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+        else
+            nohup openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+        fi
+        disown 2>/dev/null || true
+    fi
     
     sleep 2
     
@@ -322,6 +351,7 @@ test_ai_connection() {
     fi
     
     # 确保环境变量已加载
+    clear_ai_env_vars
     [ -f "$OPENCLAW_ENV" ] && source "$OPENCLAW_ENV"
     
     # 显示当前模型配置
@@ -334,8 +364,8 @@ test_ai_connection() {
     echo ""
     
     local result
-    # 添加 || true 防止命令失败导致函数退出
-    result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
+    # Keep the real exit code, avoid false-positive API test pass.
+    result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
     local exit_code=$?
     
     # 过滤掉 Node.js 警告信息和 JavaScript 错误
@@ -3606,10 +3636,13 @@ manage_service() {
                     
                     if confirm "是否重启服务？" "n"; then
                         # 使用官方 restart 命令
-                        if [ -f "$OPENCLAW_ENV" ]; then
-                            source "$OPENCLAW_ENV"
+                        openclaw gateway stop > /dev/null 2>&1 || true
+                        sleep 1
+                        if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+                            setsid bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+                        else
+                            setsid openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
                         fi
-                        openclaw gateway restart 2>&1 | head -5
                         sleep 2
                         log_info "服务已重启"
                     fi
@@ -3672,15 +3705,15 @@ manage_service() {
                 
                 # 后台启动 Gateway（使用 setsid 完全脱离终端）
                 if command -v setsid &> /dev/null; then
-                    if [ -f "$OPENCLAW_ENV" ]; then
-                        setsid bash -c "source $OPENCLAW_ENV && exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+                    if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+                        setsid bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
                     else
                         setsid openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
                     fi
                 else
                     # 备用方案：nohup + disown
-                    if [ -f "$OPENCLAW_ENV" ]; then
-                        nohup bash -c "source $OPENCLAW_ENV && exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+                    if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+                        nohup bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
                     else
                         nohup openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
                     fi
@@ -3779,15 +3812,25 @@ manage_service() {
                 # 确保配置正确
                 ensure_openclaw_init
                 
-                # 加载环境变量
-                if [ -f "$OPENCLAW_ENV" ]; then
-                    source "$OPENCLAW_ENV"
+                # 使用显式 env 注入方式重启，避免后台进程丢失 API Key
+                openclaw gateway stop > /dev/null 2>&1 || true
+                sleep 1
+                local restart_output=""
+                local restart_exit=0
+                if command -v setsid &> /dev/null; then
+                    if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+                        setsid bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+                    else
+                        setsid openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+                    fi
+                else
+                    if [ -f "$OPENCLAW_ENV" ] || [ -f "$OPENCLAW_DOTENV" ]; then
+                        nohup bash -lc "set -a; [ -f '$OPENCLAW_ENV' ] && source '$OPENCLAW_ENV'; [ -f '$OPENCLAW_DOTENV' ] && source '$OPENCLAW_DOTENV'; set +a; exec openclaw gateway --port 18789" > /tmp/openclaw-gateway.log 2>&1 &
+                    else
+                        nohup openclaw gateway --port 18789 > /tmp/openclaw-gateway.log 2>&1 &
+                    fi
+                    disown 2>/dev/null || true
                 fi
-                
-                # 使用官方 restart 命令
-                local restart_output
-                restart_output=$(openclaw gateway restart 2>&1) || true
-                local restart_exit=$?
                 
                 sleep 2
                 
@@ -4036,6 +4079,7 @@ save_openclaw_ai_config() {
     ensure_openclaw_init
     
     local env_file="$OPENCLAW_ENV"
+    local dotenv_file="$OPENCLAW_DOTENV"
     local config_file="$OPENCLAW_JSON"
     
     # 创建或更新环境变量文件
@@ -4044,58 +4088,72 @@ save_openclaw_ai_config() {
 # 由配置菜单自动生成: $(date '+%Y-%m-%d %H:%M:%S')
 EOF
 
+    # OpenClaw daemon-friendly dotenv (KEY=VALUE, no "export")
+    cat > "$dotenv_file" << EOF
+# OpenClaw dotenv
+# Generated by config-menu.sh: $(date '+%Y-%m-%d %H:%M:%S')
+EOF
+
+    append_ai_var() {
+        local k="$1"
+        local v="$2"
+        echo "export ${k}=${v}" >> "$env_file"
+        echo "${k}=${v}" >> "$dotenv_file"
+    }
+
     # 根据 provider 设置对应的环境变量
     case "$provider" in
         anthropic)
-            echo "export ANTHROPIC_API_KEY=$api_key" >> "$env_file"
-            [ -n "$base_url" ] && echo "export ANTHROPIC_BASE_URL=$base_url" >> "$env_file"
+            append_ai_var "ANTHROPIC_API_KEY" "$api_key"
+            [ -n "$base_url" ] && append_ai_var "ANTHROPIC_BASE_URL" "$base_url"
             ;;
         openai)
-            echo "export OPENAI_API_KEY=$api_key" >> "$env_file"
-            [ -n "$base_url" ] && echo "export OPENAI_BASE_URL=$base_url" >> "$env_file"
+            append_ai_var "OPENAI_API_KEY" "$api_key"
+            [ -n "$base_url" ] && append_ai_var "OPENAI_BASE_URL" "$base_url"
             ;;
         deepseek)
-            echo "export DEEPSEEK_API_KEY=$api_key" >> "$env_file"
-            echo "export DEEPSEEK_BASE_URL=${base_url:-https://api.deepseek.com}" >> "$env_file"
+            append_ai_var "DEEPSEEK_API_KEY" "$api_key"
+            append_ai_var "DEEPSEEK_BASE_URL" "${base_url:-https://api.deepseek.com}"
             ;;
         kimi)
-            echo "export MOONSHOT_API_KEY=$api_key" >> "$env_file"
-            echo "export MOONSHOT_BASE_URL=${base_url:-https://api.moonshot.cn/v1}" >> "$env_file"
+            append_ai_var "MOONSHOT_API_KEY" "$api_key"
+            append_ai_var "MOONSHOT_BASE_URL" "${base_url:-https://api.moonshot.cn/v1}"
             ;;
         google|google-gemini-cli|google-antigravity)
-            echo "export GOOGLE_API_KEY=$api_key" >> "$env_file"
-            [ -n "$base_url" ] && echo "export GOOGLE_BASE_URL=$base_url" >> "$env_file"
+            append_ai_var "GOOGLE_API_KEY" "$api_key"
+            [ -n "$base_url" ] && append_ai_var "GOOGLE_BASE_URL" "$base_url"
             ;;
         groq)
-            echo "export OPENAI_API_KEY=$api_key" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${base_url:-https://api.groq.com/openai/v1}" >> "$env_file"
+            append_ai_var "OPENAI_API_KEY" "$api_key"
+            append_ai_var "OPENAI_BASE_URL" "${base_url:-https://api.groq.com/openai/v1}"
             ;;
         mistral)
-            echo "export OPENAI_API_KEY=$api_key" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${base_url:-https://api.mistral.ai/v1}" >> "$env_file"
+            append_ai_var "OPENAI_API_KEY" "$api_key"
+            append_ai_var "OPENAI_BASE_URL" "${base_url:-https://api.mistral.ai/v1}"
             ;;
         openrouter)
-            echo "export OPENAI_API_KEY=$api_key" >> "$env_file"
-            echo "export OPENAI_BASE_URL=${base_url:-https://openrouter.ai/api/v1}" >> "$env_file"
+            append_ai_var "OPENAI_API_KEY" "$api_key"
+            append_ai_var "OPENAI_BASE_URL" "${base_url:-https://openrouter.ai/api/v1}"
             ;;
         ollama)
-            echo "export OLLAMA_HOST=${base_url:-http://localhost:11434}" >> "$env_file"
+            append_ai_var "OLLAMA_HOST" "${base_url:-http://localhost:11434}"
             ;;
         xai)
-            echo "export XAI_API_KEY=$api_key" >> "$env_file"
+            append_ai_var "XAI_API_KEY" "$api_key"
             ;;
         zai)
-            echo "export ZAI_API_KEY=$api_key" >> "$env_file"
+            append_ai_var "ZAI_API_KEY" "$api_key"
             ;;
         minimax|minimax-cn)
-            echo "export MINIMAX_API_KEY=$api_key" >> "$env_file"
+            append_ai_var "MINIMAX_API_KEY" "$api_key"
             ;;
         opencode)
-            echo "export OPENCODE_API_KEY=$api_key" >> "$env_file"
+            append_ai_var "OPENCODE_API_KEY" "$api_key"
             ;;
     esac
     
     chmod 600 "$env_file"
+    chmod 600 "$dotenv_file"
     
     # 设置默认模型
     if check_openclaw_installed; then
@@ -4161,6 +4219,7 @@ EOF
         
         if [ -n "$openclaw_model" ]; then
             # 加载环境变量并设置模型
+            clear_ai_env_vars
             source "$env_file"
             openclaw models set "$openclaw_model" 2>/dev/null || true
             log_info "OpenClaw 默认模型已设置为: $openclaw_model"
