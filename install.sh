@@ -173,6 +173,384 @@ check_command() {
     command -v "$1" &> /dev/null
 }
 
+# WebUI 访问模式（local/tailscale/public-domain）
+WEBUI_ACCESS_MODE="local"
+WEBUI_DOMAIN=""
+WEBUI_TAILSCALE_MODE="serve"
+WEBUI_PUBLIC_IP=""
+WEBUI_SETUP_RESULT="未配置"
+
+# 清理旧的 AI 环境变量，避免切换后残留冲突
+clear_ai_env_vars() {
+    unset ANTHROPIC_API_KEY ANTHROPIC_BASE_URL
+    unset OPENAI_API_KEY OPENAI_BASE_URL
+    unset DEEPSEEK_API_KEY DEEPSEEK_BASE_URL
+    unset MOONSHOT_API_KEY MOONSHOT_BASE_URL
+    unset GOOGLE_API_KEY GOOGLE_BASE_URL
+    unset OLLAMA_HOST
+    unset XAI_API_KEY ZAI_API_KEY MINIMAX_API_KEY OPENCODE_API_KEY
+}
+
+# 修复历史遗留的无效配置键（models.default）
+repair_openclaw_config_schema() {
+    local config_file="$HOME/.openclaw/openclaw.json"
+
+    [ -f "$config_file" ] || return 0
+
+    if command -v node &> /dev/null; then
+        local node_out
+        node_out=$(node -e "
+const fs = require('fs');
+const file = process.argv[1];
+try {
+  const raw = fs.readFileSync(file, 'utf8');
+  const cfg = JSON.parse(raw);
+  if (cfg.models && Object.prototype.hasOwnProperty.call(cfg.models, 'default')) {
+    delete cfg.models.default;
+    fs.writeFileSync(file, JSON.stringify(cfg, null, 2));
+    console.log('fixed');
+  }
+} catch (_) {}
+" "$config_file" 2>/dev/null || true)
+        if [ "$node_out" = "fixed" ]; then
+            log_warn "检测到旧版无效键 models.default，已自动修复 openclaw.json"
+        fi
+        return 0
+    fi
+
+    if command -v python3 &> /dev/null; then
+        local py_out
+        py_out=$(python3 -c "
+import json
+import sys
+from pathlib import Path
+file = Path(sys.argv[1])
+try:
+    cfg = json.loads(file.read_text(encoding='utf-8'))
+    if isinstance(cfg, dict) and isinstance(cfg.get('models'), dict) and 'default' in cfg['models']:
+        del cfg['models']['default']
+        file.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding='utf-8')
+        print('fixed')
+except Exception:
+    pass
+" "$config_file" 2>/dev/null || true)
+        if [ "$py_out" = "fixed" ]; then
+            log_warn "检测到旧版无效键 models.default，已自动修复 openclaw.json"
+        fi
+    fi
+
+    return 0
+}
+
+# 确保网关鉴权为 token 且 token 存在
+ensure_gateway_auth_token() {
+    if ! check_command openclaw; then
+        return 0
+    fi
+
+    # 兼容不同配置结构：旧版可能直接是 gateway.auth=token
+    local auth_mode
+    auth_mode=$(openclaw config get gateway.auth.mode 2>/dev/null || true)
+    if [ -z "$auth_mode" ] || [ "$auth_mode" = "undefined" ]; then
+        auth_mode=$(openclaw config get gateway.auth 2>/dev/null || true)
+    fi
+
+    if [ "$auth_mode" != "token" ]; then
+        openclaw config set gateway.auth.mode token 2>/dev/null || true
+        openclaw config set gateway.auth token 2>/dev/null || true
+    fi
+
+    local auth_token
+    auth_token=$(openclaw config get gateway.auth.token 2>/dev/null || true)
+    if [ -z "$auth_token" ] || [ "$auth_token" = "undefined" ] || [ "$auth_token" = "null" ]; then
+        local new_token
+        new_token=$(openssl rand -hex 32 2>/dev/null || cat /dev/urandom | head -c 32 | xxd -p 2>/dev/null || date +%s%N | sha256sum | head -c 64)
+        openclaw config set gateway.auth.token "$new_token" 2>/dev/null || true
+        log_info "已启用 token 鉴权并生成新 token"
+    fi
+
+    return 0
+}
+
+# 安装 Tailscale
+install_tailscale() {
+    if check_command tailscale; then
+        log_info "Tailscale 已安装: $(tailscale version 2>/dev/null | head -1 || echo installed)"
+        return 0
+    fi
+
+    log_step "安装 Tailscale..."
+    case "$OS" in
+        ubuntu|debian|centos|rhel|fedora)
+            curl -fsSL https://tailscale.com/install.sh | sudo sh
+            ;;
+        arch|manjaro)
+            sudo pacman -S tailscale --noconfirm
+            ;;
+        macos)
+            install_homebrew
+            brew install tailscale
+            ;;
+        *)
+            log_warn "当前系统暂不支持自动安装 Tailscale，请手动安装后再配置"
+            return 1
+            ;;
+    esac
+
+    if check_command tailscale; then
+        log_info "Tailscale 安装完成"
+        return 0
+    fi
+
+    log_warn "Tailscale 安装失败"
+    return 1
+}
+
+# 启用 Tailscale 并配置 serve/funnel
+setup_tailscale_webui() {
+    local mode="$1"
+
+    install_tailscale || return 1
+
+    if [ "$OS" != "macos" ]; then
+        sudo systemctl enable tailscaled >/dev/null 2>&1 || true
+        sudo systemctl start tailscaled >/dev/null 2>&1 || true
+    fi
+
+    # 未登录则引导登录
+    if ! tailscale status >/dev/null 2>&1; then
+        log_warn "Tailscale 尚未登录，正在尝试 tailscale up（可能需要浏览器授权）"
+        sudo tailscale up || tailscale up || true
+    fi
+
+    if ! tailscale status >/dev/null 2>&1; then
+        log_warn "Tailscale 仍未就绪，请手动执行: sudo tailscale up"
+        return 1
+    fi
+
+    # 配置 HTTPS 反代到本机 OpenClaw
+    sudo tailscale serve --bg --https=443 http://127.0.0.1:18789 >/dev/null 2>&1 || tailscale serve --bg --https=443 http://127.0.0.1:18789 >/dev/null 2>&1 || true
+    if [ "$mode" = "funnel" ]; then
+        sudo tailscale funnel --bg 443 on >/dev/null 2>&1 || tailscale funnel --bg 443 on >/dev/null 2>&1 || sudo tailscale funnel 443 on >/dev/null 2>&1 || tailscale funnel 443 on >/dev/null 2>&1 || true
+    fi
+
+    WEBUI_SETUP_RESULT="Tailscale 已安装并尝试启用 ${mode}"
+    return 0
+}
+
+# 安装 Caddy
+install_caddy() {
+    if check_command caddy; then
+        log_info "Caddy 已安装: $(caddy version 2>/dev/null | head -1 || echo installed)"
+        return 0
+    fi
+
+    log_step "安装 Caddy（用于公网域名 HTTPS 反向代理）..."
+    case "$OS" in
+        ubuntu|debian)
+            sudo apt-get update
+            sudo apt-get install -y caddy
+            ;;
+        fedora)
+            sudo dnf install -y caddy
+            ;;
+        centos|rhel)
+            sudo yum install -y caddy || true
+            ;;
+        arch|manjaro)
+            sudo pacman -S caddy --noconfirm
+            ;;
+        macos)
+            install_homebrew
+            brew install caddy
+            ;;
+        *)
+            log_warn "当前系统暂不支持自动安装 Caddy，请手动安装"
+            return 1
+            ;;
+    esac
+
+    if check_command caddy; then
+        log_info "Caddy 安装完成"
+        return 0
+    fi
+
+    log_warn "Caddy 安装失败"
+    return 1
+}
+
+# 尝试放行 80/443 端口
+open_http_ports_if_possible() {
+    if check_command ufw; then
+        sudo ufw allow 80/tcp >/dev/null 2>&1 || true
+        sudo ufw allow 443/tcp >/dev/null 2>&1 || true
+    fi
+    if check_command firewall-cmd; then
+        sudo firewall-cmd --permanent --add-service=http >/dev/null 2>&1 || true
+        sudo firewall-cmd --permanent --add-service=https >/dev/null 2>&1 || true
+        sudo firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+}
+
+# 尝试放行 OpenClaw 网关端口
+open_openclaw_port_if_possible() {
+    if check_command ufw; then
+        sudo ufw allow 18789/tcp >/dev/null 2>&1 || true
+    fi
+    if check_command firewall-cmd; then
+        sudo firewall-cmd --permanent --add-port=18789/tcp >/dev/null 2>&1 || true
+        sudo firewall-cmd --reload >/dev/null 2>&1 || true
+    fi
+}
+
+# 配置 Caddy 反代 OpenClaw
+setup_public_domain_webui() {
+    local domain="$1"
+    [ -n "$domain" ] || return 1
+
+    install_caddy || return 1
+
+    local caddyfile_tmp="/tmp/openclaw-Caddyfile"
+    cat > "$caddyfile_tmp" << EOF
+https://$domain {
+    reverse_proxy 127.0.0.1:18789
+}
+EOF
+
+    if [ "$OS" = "macos" ]; then
+        sudo mkdir -p /usr/local/etc/caddy >/dev/null 2>&1 || true
+        sudo mv "$caddyfile_tmp" /usr/local/etc/caddy/Caddyfile
+        sudo caddy start --config /usr/local/etc/caddy/Caddyfile >/dev/null 2>&1 || true
+    else
+        sudo mkdir -p /etc/caddy >/dev/null 2>&1 || true
+        sudo mv "$caddyfile_tmp" /etc/caddy/Caddyfile
+        sudo systemctl enable caddy >/dev/null 2>&1 || true
+        sudo systemctl restart caddy >/dev/null 2>&1 || sudo systemctl start caddy >/dev/null 2>&1 || true
+    fi
+
+    open_http_ports_if_possible
+    WEBUI_SETUP_RESULT="Caddy 已安装并配置域名反代: $domain"
+    return 0
+}
+
+# 公网 IP 直连（高风险）
+setup_public_ip_direct_webui() {
+    local ip="$1"
+
+    openclaw config set gateway.bind lan 2>/dev/null || openclaw config set gateway.bind custom 2>/dev/null || true
+    if [ -n "$ip" ]; then
+        openclaw config set gateway.controlUi.allowedOrigins "[\"http://${ip}:18789\"]" 2>/dev/null || true
+    fi
+    ensure_gateway_auth_token
+    open_openclaw_port_if_possible
+
+    if [ -n "$ip" ]; then
+        WEBUI_SETUP_RESULT="已启用公网 IP 直连: http://${ip}:18789/"
+    else
+        WEBUI_SETUP_RESULT="已启用公网 IP 直连（IP 未检测到）"
+    fi
+
+    return 0
+}
+
+# WebUI 访问模式向导（本机/Tailscale/公网域名）
+setup_webui_access() {
+    log_step "配置 WebUI 访问方式..."
+
+    if ! check_command openclaw; then
+        log_warn "未检测到 openclaw，跳过 WebUI 访问配置"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo -e "${WHITE}  第 4 步: WebUI 访问配置${NC}"
+    echo -e "${CYAN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+    echo ""
+    echo -e "${WHITE}OpenClaw Control UI 默认地址:${NC} http://<host>:18789/"
+    echo ""
+    echo "  1) 仅本机访问（默认，最安全）"
+    echo "  2) Tailscale 远程访问（推荐）"
+    echo "  3) 公网域名访问（高级，需反代 + TLS）"
+    echo "  4) 公网 IP 直连（极高风险，不推荐）"
+    echo ""
+
+    echo -en "${YELLOW}请选择访问方式 [1-4]（默认: 1）：${NC}"; read webui_choice < "$TTY_INPUT"
+    webui_choice=${webui_choice:-1}
+
+    case "$webui_choice" in
+        2)
+            WEBUI_ACCESS_MODE="tailscale"
+            echo -en "${YELLOW}Tailscale 模式 [serve/funnel]（默认: serve）：${NC}"; read tailscale_mode < "$TTY_INPUT"
+            tailscale_mode=${tailscale_mode:-serve}
+            case "$tailscale_mode" in
+                serve|funnel) WEBUI_TAILSCALE_MODE="$tailscale_mode" ;;
+                *) WEBUI_TAILSCALE_MODE="serve" ;;
+            esac
+
+            openclaw config set gateway.bind loopback 2>/dev/null || true
+            openclaw config set gateway.tailscale.mode "$WEBUI_TAILSCALE_MODE" 2>/dev/null || true
+            ensure_gateway_auth_token
+            if setup_tailscale_webui "$WEBUI_TAILSCALE_MODE"; then
+                log_info "已完成 Tailscale 安装与配置: $WEBUI_TAILSCALE_MODE"
+            else
+                WEBUI_SETUP_RESULT="Tailscale 配置未完成（需手动）"
+                log_warn "Tailscale 自动安装/配置未完全成功，请按提示手动完成"
+            fi
+            ;;
+        3)
+            WEBUI_ACCESS_MODE="public-domain"
+            echo ""
+            echo -e "${YELLOW}⚠️ 公网访问高风险：必须使用 HTTPS + 反向代理 + 鉴权${NC}"
+            echo -e "${YELLOW}  不建议直接暴露 IP:18789 到公网${NC}"
+            echo ""
+            echo -en "${YELLOW}请输入你的公网域名（例如: ai.example.com）：${NC}"; read WEBUI_DOMAIN < "$TTY_INPUT"
+
+            openclaw config set gateway.bind loopback 2>/dev/null || true
+            if [ -n "$WEBUI_DOMAIN" ]; then
+                openclaw config set gateway.controlUi.allowedOrigins "[\"https://${WEBUI_DOMAIN}\"]" 2>/dev/null || true
+            fi
+            ensure_gateway_auth_token
+            if [ -n "$WEBUI_DOMAIN" ] && setup_public_domain_webui "$WEBUI_DOMAIN"; then
+                log_info "已完成公网域名反代安装与配置: $WEBUI_DOMAIN"
+            else
+                WEBUI_SETUP_RESULT="公网域名配置未完成（需手动安装反向代理）"
+                log_warn "公网域名自动部署未完全成功，请手动检查 DNS/Caddy/Nginx"
+            fi
+            ;;
+        4)
+            WEBUI_ACCESS_MODE="public-ip-direct"
+            echo ""
+            echo -e "${RED}⚠️ 高风险：公网 IP 直连会直接暴露 18789 端口${NC}"
+            echo -e "${YELLOW}  强烈建议仅临时使用，并确保 token 强口令 + 防火墙白名单${NC}"
+            echo ""
+
+            local detected_ip=""
+            detected_ip=$(curl -4fsSL https://api.ipify.org 2>/dev/null || curl -4fsSL https://ifconfig.me 2>/dev/null || true)
+            if [ -n "$detected_ip" ]; then
+                echo -e "${CYAN}检测到公网 IP: ${WHITE}$detected_ip${NC}"
+            fi
+            echo -en "${YELLOW}请输入公网 IP（默认: ${detected_ip:-手动输入}）：${NC}"; read WEBUI_PUBLIC_IP < "$TTY_INPUT"
+            WEBUI_PUBLIC_IP=${WEBUI_PUBLIC_IP:-$detected_ip}
+
+            if setup_public_ip_direct_webui "$WEBUI_PUBLIC_IP"; then
+                log_info "已完成公网 IP 直连配置"
+            else
+                WEBUI_SETUP_RESULT="公网 IP 直连配置未完成"
+                log_warn "公网 IP 直连自动配置未完全成功，请手动检查"
+            fi
+            ;;
+        *)
+            WEBUI_ACCESS_MODE="local"
+            openclaw config set gateway.bind loopback 2>/dev/null || true
+            WEBUI_SETUP_RESULT="仅本机模式，无需额外安装"
+            log_info "已设置为仅本机访问模式"
+            ;;
+    esac
+
+    return 0
+}
+
 install_homebrew() {
     if ! check_command brew; then
         log_step "安装 Homebrew..."
@@ -349,6 +727,9 @@ configure_openclaw_model() {
     local env_file="$HOME/.openclaw/env"
     local dotenv_file="$HOME/.openclaw/.env"
     local openclaw_json="$HOME/.openclaw/openclaw.json"
+
+    # 先修复历史坏配置，避免后续 openclaw 命令报 schema 错误
+    repair_openclaw_config_schema
     
     # 创建环境变量文件
     cat > "$env_file" << EOF
@@ -496,6 +877,7 @@ EOF
         
         if [ -n "$openclaw_model" ]; then
             # 加载环境变量
+            clear_ai_env_vars
             source "$env_file"
             
             # 设置默认模型（显示错误信息以便调试）
@@ -509,16 +891,41 @@ EOF
             else
                 log_warn "模型设置可能失败: $openclaw_model"
                 echo -e "  ${GRAY}$set_result${NC}" | head -3
-                
-                # 尝试直接使用 config set
-                log_info "尝试使用 config set 设置模型..."
-                openclaw config set models.default "$openclaw_model" 2>/dev/null || true
             fi
+
+            # 二次强制同步，避免运行态与显示不一致
+            force_sync_default_model "$openclaw_model"
         fi
     fi
     
     # 添加到 shell 配置文件
     add_env_to_shell "$env_file" || true
+    return 0
+}
+
+# 强制同步默认模型（仅通过 models 子命令）
+force_sync_default_model() {
+    local target_model="$1"
+
+    if [ -z "$target_model" ]; then
+        return 0
+    fi
+
+    if ! check_command openclaw; then
+        return 0
+    fi
+
+    # 仅使用 models set，避免写入不兼容的 config 键
+    openclaw models set "$target_model" >/dev/null 2>&1 || true
+
+    local current_default_line
+    current_default_line=$(openclaw models status 2>/dev/null | grep -E "^Default" | head -1 || true)
+    if echo "$current_default_line" | grep -q "$target_model"; then
+        log_info "模型默认值已强制同步: $target_model"
+    else
+        log_warn "模型默认值同步可能未生效，请稍后手动执行: openclaw models set $target_model"
+    fi
+
     return 0
 }
 
@@ -825,6 +1232,9 @@ add_env_to_shell() {
 
 run_onboard_wizard() {
     log_step "运行配置向导..."
+
+    # 进入向导时先修复一次配置 schema
+    repair_openclaw_config_schema
     
     echo ""
     echo -e "${PURPLE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -855,9 +1265,10 @@ run_onboard_wizard() {
             
             if confirm "是否测试现有 API 连接？" "y"; then
                 # 从 env 文件读取配置进行测试
+                clear_ai_env_vars
                 source "$env_file"
                 # 获取当前模型
-                AI_MODEL=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
+                AI_MODEL=$(openclaw models status 2>/dev/null | awk -F': *' '/^Default/{print $2; exit}' | sed 's|.*/||')
                 if [ -n "$ANTHROPIC_API_KEY" ]; then
                     AI_PROVIDER="anthropic"
                     AI_KEY="$ANTHROPIC_API_KEY"
@@ -1114,6 +1525,7 @@ test_api_connection() {
     
     # 确保环境变量已加载
     local env_file="$HOME/.openclaw/env"
+    clear_ai_env_vars
     [ -f "$env_file" ] && source "$env_file"
     
     if ! check_command openclaw; then
@@ -1311,7 +1723,7 @@ After=network.target
 [Service]
 Type=simple
 User=$USER
-ExecStart=$(which openclaw) start --daemon
+ExecStart=/bin/bash -lc 'set -a; [ -f ~/.openclaw/env ] && source ~/.openclaw/env; [ -f ~/.openclaw/.env ] && source ~/.openclaw/.env; set +a; exec $(which openclaw) gateway --port 18789'
 Restart=on-failure
 RestartSec=10
 
@@ -1376,11 +1788,44 @@ print_success() {
     echo "  openclaw gateway stop    # 停止服务"
     echo "  openclaw gateway status  # 查看状态"
     echo "  openclaw models status   # 查看模型配置"
+    echo "  openclaw models set PROVIDER/MODEL  # 强制同步模型"
     echo "  openclaw channels list   # 查看渠道列表"
     echo "  openclaw doctor          # 诊断问题"
     echo ""
     echo -e "${PURPLE}📚 官方文档: https://clawd.bot/docs${NC}"
     echo -e "${PURPLE}💬 社区支持: https://github.com/$GITHUB_REPO/discussions${NC}"
+    echo ""
+
+    echo -e "${CYAN}WebUI 访问提示:${NC}"
+    echo "  配置结果: $WEBUI_SETUP_RESULT"
+    case "$WEBUI_ACCESS_MODE" in
+        tailscale)
+            echo "  模式: Tailscale (${WEBUI_TAILSCALE_MODE})"
+            echo "  本机地址: http://127.0.0.1:18789/"
+            echo "  查询地址: tailscale status && tailscale serve status"
+            ;;
+        public-domain)
+            echo "  模式: 公网域名（高级）"
+            echo "  本机回源: http://127.0.0.1:18789/"
+            if [ -n "$WEBUI_DOMAIN" ]; then
+                echo "  建议外网地址: https://$WEBUI_DOMAIN/"
+            fi
+            echo "  注意: 仅放行 443，禁止公网直连 18789"
+            ;;
+        public-ip-direct)
+            echo "  模式: 公网 IP 直连（极高风险）"
+            if [ -n "$WEBUI_PUBLIC_IP" ]; then
+                echo "  直连地址: http://$WEBUI_PUBLIC_IP:18789/"
+            else
+                echo "  直连地址: http://<你的公网IP>:18789/"
+            fi
+            echo "  注意: 已尝试放行 18789，请务必限制来源 IP"
+            ;;
+        *)
+            echo "  模式: 仅本机访问（默认）"
+            echo "  访问地址: http://127.0.0.1:18789/"
+            ;;
+    esac
     echo ""
 }
 
@@ -1396,6 +1841,7 @@ start_openclaw_service() {
     local env_file="$HOME/.openclaw/env"
     local dotenv_file="$HOME/.openclaw/.env"
     if [ -f "$env_file" ] || [ -f "$dotenv_file" ]; then
+        clear_ai_env_vars
         set -a
         [ -f "$env_file" ] && source "$env_file"
         [ -f "$dotenv_file" ] && source "$dotenv_file"
@@ -1551,6 +1997,7 @@ main() {
     create_directories
     install_openclaw
     run_onboard_wizard
+    setup_webui_access
     setup_daemon
     print_success
     

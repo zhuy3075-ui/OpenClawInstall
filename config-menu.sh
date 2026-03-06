@@ -921,7 +921,8 @@ show_status() {
         
         # 显示 OpenClaw 模型配置
         if check_openclaw_installed; then
-            local default_model=$(openclaw config get models.default 2>/dev/null || echo "未配置")
+            local default_model=$(openclaw models status 2>/dev/null | awk -F': *' '/^Default/{print $2; exit}')
+            default_model=${default_model:-"未配置"}
             echo -e "    • 默认模型: ${WHITE}$default_model${NC}"
         fi
         
@@ -4811,7 +4812,7 @@ quick_test_ai() {
     
     # 获取当前模型
     if check_openclaw_installed; then
-        model=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
+        model=$(openclaw models status 2>/dev/null | awk -F': *' '/^Default/{print $2; exit}' | sed 's|.*/||')
     fi
     
     echo -e "当前配置:"
@@ -5084,7 +5085,7 @@ run_all_tests() {
     
     # 获取当前模型
     if check_openclaw_installed; then
-        model=$(openclaw config get models.default 2>/dev/null | sed 's|.*/||')
+        model=$(openclaw models status 2>/dev/null | awk -F': *' '/^Default/{print $2; exit}' | sed 's|.*/||')
     fi
     
     if [ -n "$provider" ] && [ -n "$api_key" ] && [ "$api_key" != "your-api-key-here" ]; then
