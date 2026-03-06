@@ -4017,10 +4017,10 @@ manage_service() {
             echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo ""
             echo -e "${CYAN}如需重新安装，请运行:${NC}"
-            echo "  curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/install.sh | bash"
+            echo "  curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash"
             echo ""
             echo -e "${CYAN}或下载桌面版:${NC}"
-            echo "  https://github.com/miaoxworld/openclaw-manager"
+            echo "  https://github.com/zhuy3075-ui/OpenClawInstall"
             echo ""
             
             press_enter

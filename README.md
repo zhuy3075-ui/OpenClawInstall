@@ -40,7 +40,7 @@
 如果你更喜欢图形界面，推荐使用 **OpenClaw Manager** 桌面应用：
 
 <p align="center">
-  <a href="https://github.com/miaoxworld/openclaw-manager">
+  <a href="https://github.com/zhuy3075-ui/OpenClawInstall">
     <img src="https://img.shields.io/badge/下载桌面版-OpenClaw%20Manager-blue?style=for-the-badge&logo=github" alt="Download">
   </a>
 </p>
@@ -50,14 +50,14 @@
 - 🔧 **可视化配置** - AI 模型、消息渠道一键配置
 - 💻 **跨平台** - 支持 macOS、Windows、Linux
 
-👉 **下载地址**: [github.com/miaoxworld/openclaw-manager](https://github.com/miaoxworld/openclaw-manager)
+👉 **下载地址**: [github.com/zhuy3075-ui/OpenClawInstall](https://github.com/zhuy3075-ui/OpenClawInstall)
 
 ---
 
 ### 方式一：一键安装（命令行版）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash
 ```
 
 安装脚本会自动：
@@ -72,7 +72,7 @@ curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/i
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/miaoxworld/OpenClawInstaller.git
+git clone https://github.com/zhuy3075-ui/OpenClawInstall.git
 cd OpenClawInstaller
 
 # 2. 添加执行权限
@@ -105,7 +105,7 @@ openclaw gateway start
 bash ~/.openclaw/config-menu.sh
 
 # 或从 GitHub 下载运行
-curl -fsSL https://raw.githubusercontent.com/miaoxworld/OpenClawInstaller/main/config-menu.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/config-menu.sh | bash
 ```
 
 ## ✨ 功能特性
@@ -514,13 +514,13 @@ rm -rf ~/.openclaw
 
 - [OpenClaw 官网](https://clawd.bot)
 - [官方文档](https://clawd.bot/docs)
-- [🖥️ OpenClaw Manager 桌面版](https://github.com/miaoxworld/openclaw-manager) - 图形界面管理工具
-- [安装工具仓库](https://github.com/miaoxworld/OpenClawInstaller) - 命令行版本
+- [🖥️ OpenClaw Manager 桌面版](https://github.com/zhuy3075-ui/OpenClawInstall) - 图形界面管理工具
+- [安装工具仓库](https://github.com/zhuy3075-ui/OpenClawInstall) - 命令行版本
 - [OpenClaw 主仓库](https://github.com/openclaw/openclaw)
-- [社区讨论](https://github.com/miaoxworld/OpenClawInstaller/discussions)
+- [社区讨论](https://github.com/zhuy3075-ui/OpenClawInstall/discussions)
 
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/miaoxworld">miaoxworld</a>
+  Made with ❤️ by <a href="https://github.com/zhuy3075-ui/OpenClawInstall">miaoxworld</a>
 </p>
