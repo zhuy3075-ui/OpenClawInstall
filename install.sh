@@ -518,7 +518,8 @@ EOF
     fi
     
     # 添加到 shell 配置文件
-    add_env_to_shell "$env_file"
+    add_env_to_shell "$env_file" || true
+    return 0
 }
 
 # 配置自定义 provider（用于支持自定义 API 地址）
@@ -814,6 +815,8 @@ add_env_to_shell() {
             log_info "环境变量已添加到: $shell_rc"
         fi
     fi
+
+    return 0
 }
 
 # ================================ 配置向导 ================================
