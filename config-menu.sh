@@ -247,6 +247,41 @@ clear_ai_env_vars() {
     unset XAI_API_KEY ZAI_API_KEY MINIMAX_API_KEY
 }
 
+# 是否需要通过 custom provider 写入 openclaw.json
+# 返回 0 表示需要，返回 1 表示不需要
+should_use_custom_provider() {
+    local provider="$1"
+    local base_url="$2"
+
+    [ -n "$base_url" ] || return 1
+
+    case "$provider" in
+        anthropic|openai|azure-openai)
+            return 0
+            ;;
+        deepseek)
+            [ "$base_url" != "https://api.deepseek.com" ] && return 0
+            ;;
+        kimi)
+            [ "$base_url" != "https://api.moonshot.cn/v1" ] && return 0
+            ;;
+        groq)
+            [ "$base_url" != "https://api.groq.com/openai/v1" ] && return 0
+            ;;
+        mistral)
+            [ "$base_url" != "https://api.mistral.ai/v1" ] && return 0
+            ;;
+        openrouter)
+            [ "$base_url" != "https://openrouter.ai/api/v1" ] && return 0
+            ;;
+        opencode)
+            [ "$base_url" != "https://api.opencode.ai/v1" ] && return 0
+            ;;
+    esac
+
+    return 1
+}
+
 # ================================ 测试功能 ================================
 
 # 检查 OpenClaw 是否已安装
@@ -4162,21 +4197,42 @@ EOF
         local use_custom_provider=false
         
         # 如果使用自定义 BASE_URL，需要配置自定义 provider
-        if [ -n "$base_url" ] && [ "$provider" = "anthropic" ]; then
+        if should_use_custom_provider "$provider" "$base_url"; then
             use_custom_provider=true
-            configure_custom_provider "$provider" "$api_key" "$model" "$base_url" "$config_file"
-            openclaw_model="anthropic-custom/$model"
-        elif [ -n "$base_url" ] && [ "$provider" = "openai" ]; then
-            use_custom_provider=true
-            # 传递 API 类型参数（如果已设置）
-            configure_custom_provider "$provider" "$api_key" "$model" "$base_url" "$config_file" "$api_type"
-            openclaw_model="openai-custom/$model"
-        else
+            local custom_provider_name=""
+            local custom_api_type=""
+
+            case "$provider" in
+                anthropic)
+                    custom_provider_name="anthropic"
+                    custom_api_type="anthropic-messages"
+                    ;;
+                openai)
+                    custom_provider_name="openai"
+                    custom_api_type="${api_type:-openai-completions}"
+                    ;;
+                azure-openai)
+                    custom_provider_name="openai"
+                    custom_api_type="openai-completions"
+                    ;;
+                deepseek|kimi|groq|mistral|openrouter|opencode)
+                    custom_provider_name="$provider"
+                    custom_api_type="openai-completions"
+                    ;;
+            esac
+
+            if [ -n "$custom_provider_name" ]; then
+                configure_custom_provider "$custom_provider_name" "$api_key" "$model" "$base_url" "$config_file" "$custom_api_type"
+                openclaw_model="${custom_provider_name}-custom/$model"
+            fi
+        fi
+
+        if [ -z "$openclaw_model" ]; then
             case "$provider" in
                 anthropic)
                     openclaw_model="anthropic/$model"
                     ;;
-                openai|groq|mistral)
+                openai|groq|mistral|azure-openai)
                     openclaw_model="openai/$model"
                     ;;
                 deepseek)
@@ -4296,8 +4352,7 @@ configure_custom_provider() {
     if [ -f "$config_file" ]; then
         # 检查是否有旧的自定义 provider 配置
         local has_old_config="false"
-        if grep -q '"anthropic-custom"' "$config_file" 2>/dev/null || \
-           grep -q '"openai-custom"' "$config_file" 2>/dev/null; then
+        if grep -q -- '-custom"' "$config_file" 2>/dev/null; then
             has_old_config="true"
         fi
         
@@ -4369,17 +4424,23 @@ if (!config.models.providers) config.models.providers = {};
 
 // 根据用户选择决定是否清理旧配置
 if (vars.do_cleanup === 'true') {
-    delete config.models.providers['anthropic-custom'];
-    delete config.models.providers['openai-custom'];
+    for (const id of Object.keys(config.models.providers || {})) {
+        if (id.endsWith('-custom')) {
+            delete config.models.providers[id];
+        }
+    }
     if (config.models.configured) {
-        config.models.configured = config.models.configured.filter(m => {
-            if (m.startsWith('openai/claude')) return false;
-            if (m.startsWith('openrouter/claude') && !m.includes('openrouter.ai')) return false;
-            return true;
-        });
+        config.models.configured = config.models.configured.filter(
+            m => !/^[^/]+-custom\//.test(m)
+        );
     }
     if (config.models.aliases) {
-        delete config.models.aliases['claude-custom'];
+        for (const alias of Object.keys(config.models.aliases)) {
+            const aliasTarget = config.models.aliases[alias];
+            if ((typeof aliasTarget === 'string' && /^[^/]+-custom\//.test(aliasTarget)) || alias.includes('custom')) {
+                delete config.models.aliases[alias];
+            }
+        }
     }
     console.log('Old configurations cleaned up');
 }
@@ -4456,16 +4517,29 @@ if 'providers' not in config['models']:
 
 # 根据用户选择决定是否清理旧配置
 if vars['do_cleanup'] == 'true':
-    config['models']['providers'].pop('anthropic-custom', None)
-    config['models']['providers'].pop('openai-custom', None)
+    for provider_id in list(config['models']['providers'].keys()):
+        if provider_id.endswith('-custom'):
+            config['models']['providers'].pop(provider_id, None)
     if 'configured' in config['models']:
         config['models']['configured'] = [
             m for m in config['models']['configured']
-            if not (m.startswith('openai/claude') or 
-                    (m.startswith('openrouter/claude') and 'openrouter.ai' not in m))
+            if not (
+                isinstance(m, str)
+                and '/' in m
+                and m.split('/', 1)[0].endswith('-custom')
+            )
         ]
     if 'aliases' in config['models']:
-        config['models']['aliases'].pop('claude-custom', None)
+        for alias, target in list(config['models']['aliases'].items()):
+            if (
+                'custom' in alias
+                or (
+                    isinstance(target, str)
+                    and '/' in target
+                    and target.split('/', 1)[0].endswith('-custom')
+                )
+            ):
+                config['models']['aliases'].pop(alias, None)
     print('Old configurations cleaned up')
 
 config['models']['providers'][vars['provider_id']] = {

@@ -18,6 +18,8 @@
 - [快速开始](#-快速开始)
 - [功能特性](#-功能特性)
 - [详细配置](#-详细配置)
+- [WebUI 访问](#-webui-访问)
+- [配置备份与恢复](#-配置备份与恢复)
 - [常用命令](#-常用命令)
 - [配置说明](#-配置说明)
 - [安全建议](#-安全建议)
@@ -62,18 +64,23 @@ curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/in
 
 安装脚本会自动：
 1. 检测系统环境并安装依赖
-2. 安装 OpenClaw
-3. 引导完成核心配置（AI模型、身份信息）
-4. 测试 API 连接
-5. **自动启动 OpenClaw 服务**
-6. 可选打开配置菜单进行详细配置（渠道等）
+2. 检测历史 `openclaw.json` 备份并支持交互恢复指定版本
+3. 可选执行一键修复配置（schema 修复 + `openclaw doctor --fix`）
+4. 安装 OpenClaw
+5. 引导完成核心配置（AI模型、身份信息）
+6. 测试 API 连接
+7. 配置 WebUI 访问方式（本机 / Tailscale / 公网域名 / 公网 IP 直连）
+8. 配置 `openclaw.json` 定时备份策略（每小时/每天/每三天/每七天）
+9. 可选设置开机自启动
+10. 询问是否立即启动 OpenClaw Gateway
+11. 可选打开配置菜单进行详细配置（渠道等）
 
 ### 方式二：手动安装
 
 ```bash
 # 1. 克隆仓库
 git clone https://github.com/zhuy3075-ui/OpenClawInstall.git
-cd OpenClawInstaller
+cd OpenClawInstall
 
 # 2. 添加执行权限
 chmod +x install.sh config-menu.sh
@@ -81,7 +88,7 @@ chmod +x install.sh config-menu.sh
 # 3. 运行安装脚本
 ./install.sh
 
-#如果mac有权限问题，可以手动安装clawbot之后再运行install
+# 如果 macOS 有权限问题，可先手动安装 openclaw 再运行 install.sh
 npm install -g openclaw
 ```
 
@@ -91,6 +98,8 @@ npm install -g openclaw
 1. **自动询问是否启动服务**（推荐选择 Y）
 2. 后台启动 OpenClaw Gateway
 3. 可选打开配置菜单进行渠道配置
+4. 显示当前 WebUI 访问模式与访问地址
+5. 显示 `openclaw.json` 备份状态与备份目录
 
 如果需要后续管理：
 
@@ -102,7 +111,7 @@ source ~/.openclaw/env && openclaw gateway
 openclaw gateway start
 
 # 运行配置菜单进行详细配置
-bash ~/.openclaw/config-menu.sh
+bash ./config-menu.sh
 
 # 或从 GitHub 下载运行
 curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/config-menu.sh | bash
@@ -117,23 +126,36 @@ curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/co
 </p>
 
 **主流服务商:**
-- **Anthropic Claude** - claude-sonnet-4-5 / claude-opus-4-5 / claude-haiku-4-5 *(支持自定义 API 地址)*
-- **OpenAI GPT** - gpt-4o / gpt-4o-mini / gpt-4-turbo *(支持自定义 API 地址，需支持 v1/responses)*
-- **Google Gemini** - gemini-2.0-flash / gemini-1.5-pro / gemini-1.5-flash
+- **Anthropic Claude** - 默认 `claude-sonnet-4-5-20250929` *(支持自定义 API 地址)*
+- **OpenAI GPT** - 默认 `gpt-5` *(支持自定义 API 地址与 API Type)*
+- **DeepSeek** - 默认 `deepseek-chat`
+- **Kimi (Moonshot)** - 默认 `moonshot-v1-auto`
+- **Google Gemini** - 默认 `gemini-2.0-flash`
 
 **多模型网关:**
-- **OpenRouter** - 多模型网关，一个 Key 用遍所有模型 (claude-sonnet-4 / gpt-4o / gemini-pro-1.5)
+- **OpenRouter** - 默认 `anthropic/claude-sonnet-4`
+- **OpenCode** - 默认 `gpt-5`
 
 **快速推理:**
-- **Groq** - 超快推理，llama-3.3-70b-versatile / llama-3.1-8b-instant / mixtral-8x7b
-- **Mistral AI** - mistral-large-latest / mistral-small-latest / codestral-latest
+- **Groq** - 默认 `llama-3.3-70b-versatile`
+- **Mistral AI** - 默认 `mistral-large-latest`
 
-**本地部署:**
-- **Ollama** - 本地部署，无需 API Key (llama3 / llama3:70b / mistral)
+**本地 / 企业:**
+- **Ollama** - 本地部署，无需 API Key（默认 `llama3`）
+- **Azure OpenAI** - 企业版 OpenAI 兼容接口（默认 `gpt-4o-mini`）
 
-> 💡 **自定义 API 地址**: Anthropic Claude 和 OpenAI GPT 都支持自定义 API 地址，可接入 OneAPI/NewAPI/API 代理等服务。配置时先输入自定义地址，再输入 API Key。
+**国产 / 其他:**
+- **xAI Grok** - 默认 `grok-4-fast`
+- **Z.ai GLM** - 默认 `glm-4.7`
+- **MiniMax / MiniMax-CN** - 默认 `MiniMax-M2.1`
+
+**实验性:**
+- **Google Gemini CLI** - 默认 `gemini-2.5-flash`
+- **Google Antigravity** - 默认 `gemini-2.5-flash`
+
+> 💡 **自定义 API 地址（Custom Provider）**: Anthropic、OpenAI、Azure OpenAI 以及 OpenAI 兼容接口（DeepSeek/Kimi/Groq/Mistral/OpenRouter/OpenCode）均可通过自定义 Provider 配置接入任意网关地址。
 >
-> ⚠️ **OpenAI 中转要求**: 自定义 OpenAI API 地址必须支持 `v1/responses` 路径（OpenAI Responses API），不仅仅是传统的 `v1/chat/completions`。请确认您的中转服务已支持此接口。
+> ⚠️ **OpenAI 中转要求**: 自定义 OpenAI API 地址需匹配你选择的 API Type：`openai-responses` 需支持 `v1/responses`，`openai-completions` 需支持 `v1/chat/completions`。
 
 ### 📱 多渠道接入
 
@@ -158,6 +180,17 @@ curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/co
 - API 连接测试
 - 渠道连接验证
 - OpenClaw 诊断工具
+
+### 🌐 WebUI 访问模式
+
+安装向导第 4 步支持以下模式：
+
+- **仅本机访问（默认）**：`http://127.0.0.1:18789/`
+- **Tailscale 远程访问（推荐）**：自动尝试安装并配置 `serve`/`funnel`
+- **公网域名访问（高级）**：自动尝试安装 Caddy 并配置 HTTPS 反向代理
+- **公网 IP 直连（高风险）**：仅建议临时使用，务必配合 token 鉴权与防火墙白名单
+
+> ⚠️ 建议优先使用 Tailscale 或公网域名 HTTPS，避免长期直接暴露 `18789` 端口。
 
 ### 🧠 核心能力
 - **持久记忆** - 跨对话、跨平台的长期记忆
@@ -191,9 +224,39 @@ curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/co
 3. 输入 API Key（官方 Key 从 [OpenAI Platform](https://platform.openai.com/) 获取）
 4. 选择模型
 
-> ⚠️ **中转服务要求**: 如使用自定义 API 地址，中转服务必须支持 OpenAI 的 **Responses API** (`v1/responses` 路径)，而非仅支持传统的 Chat Completions API (`v1/chat/completions`)。部分老旧或功能不全的中转服务可能不支持此接口，请提前确认。
+> ⚠️ **中转服务要求**: 如使用自定义 API 地址，请确认中转服务支持你选择的 API Type：`openai-responses`（`v1/responses`）或 `openai-completions`（`v1/chat/completions`）。
 
 > 💡 **其他模型**: 配置菜单还支持 Google Gemini、OpenRouter、Groq、Mistral AI、Ollama 等，按菜单提示操作即可。
+
+## 🌐 WebUI 访问
+
+安装脚本会在第 4 步引导选择 WebUI 访问方式，并自动写入相关配置：
+
+- `gateway.bind`
+- `gateway.auth` / `gateway.auth.token`
+- `gateway.controlUi.allowedOrigins`（域名或公网 IP 模式）
+
+常用排查命令：
+
+```bash
+openclaw gateway status
+openclaw config get gateway.bind
+openclaw config get gateway.auth.token
+```
+
+如果通过公网 IP 访问时出现 “Gateway disconnected” 或浏览器安全上下文警告，建议切换到 **Tailscale** 或 **公网域名 HTTPS** 模式。
+
+## 💾 配置备份与恢复
+
+安装脚本支持 `openclaw.json` 配置的自动备份与恢复：
+
+- 定时备份频率可选：**每小时 / 每天 / 每三天 / 每七天**
+- 备份目录：`~/.openclaw/backups/openclaw-json/`
+- 备份命名：`openclaw_YYYYMMDD_HHMMSS.json`
+- 重新执行一键部署命令时，会自动列出历史备份并支持交互恢复指定版本（按日期和时间）
+- 恢复后可一键执行配置修复（schema 修复 + `openclaw doctor --fix`）
+
+> 💡 所有 `Y/n` 交互都带有输入提示（Y=同意，N=取消，回车=默认），方便新手操作。
 
 ### 配置 Telegram 机器人
 
@@ -455,6 +518,19 @@ sudo apt-get install -y nodejs
 2. 运行诊断命令：`openclaw doctor`
 3. 查看日志：`openclaw logs`
 
+### Q: 登入 WebUI 后显示 Gateway 未连接？
+
+1. 确认网关在运行：`openclaw gateway status`
+2. 确认使用的是真实 token（不是占位符）：`openclaw config get gateway.auth.token`
+3. 公网 IP 直连场景优先切换到 **Tailscale** 或 **公网域名 HTTPS**，避免浏览器安全上下文限制导致断连
+
+### Q: 如何恢复某个历史配置版本（openclaw.json）？
+
+1. 重新执行安装命令：`curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash`
+2. 当脚本提示检测到历史备份时，选择 `Y` 进入恢复流程
+3. 在列表中按编号选择目标备份（同一天会按备份时间区分）
+4. 恢复后建议执行一键修复配置
+
 ### Q: Telegram 机器人没有响应？
 
 1. 确认 Bot Token 正确
@@ -496,6 +572,18 @@ rm -rf ~/.openclaw
 ```
 
 ## 📜 更新日志
+
+### v1.0.2 (2026-03-08)
+- ✨ 新增 `openclaw.json` 定时备份（每小时/每天/每三天/每七天）
+- ✨ 重新运行安装脚本时支持交互恢复指定备份版本
+- ✨ 新增一键修复配置（schema 修复 + `openclaw doctor --fix`）
+- ✨ 所有 Y/n 交互增加输入指引，降低新手误操作
+
+### v1.0.1 (2026-03-08)
+- ✨ README 同步最新安装脚本能力
+- ✨ 新增 WebUI 访问模式说明（本机 / Tailscale / 公网域名 / 公网 IP）
+- 🔧 修正手动安装目录与配置菜单命令示例
+- 🔧 更新 OpenAI 自定义 API Type 说明（responses / completions）
 
 ### v1.0.0 (2026-01-29)
 - 🎉 首次发布

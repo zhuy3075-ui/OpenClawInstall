@@ -44,6 +44,14 @@ CONFIG_DIR="$HOME/.openclaw"
 MIN_NODE_VERSION=22
 GITHUB_REPO="zhuy3075-ui/OpenClawInstall"
 GITHUB_RAW_URL="https://raw.githubusercontent.com/$GITHUB_REPO/main"
+OPENCLAW_JSON="$CONFIG_DIR/openclaw.json"
+OPENCLAW_JSON_BACKUP_DIR="$CONFIG_DIR/backups/openclaw-json"
+OPENCLAW_JSON_BACKUP_SCRIPT="$CONFIG_DIR/backup-openclaw-json.sh"
+OPENCLAW_JSON_BACKUP_CRON_TAG="openclaw-json-backup"
+
+JSON_BACKUP_ENABLED="false"
+JSON_BACKUP_SCHEDULE="未配置"
+RESTORE_PERFORMED="false"
 
 # ================================ 工具函数 ================================
 
@@ -105,21 +113,30 @@ read_input() {
 confirm() {
     local message="$1"
     local default="${2:-y}"
+    local response=""
+    local default_upper
+    default_upper=$(echo "$default" | tr '[:lower:]' '[:upper:]')
     
     if [ "$default" = "y" ]; then
         local prompt="[Y/n]"
     else
         local prompt="[y/N]"
     fi
-    
-    echo -en "${YELLOW}$message $prompt: ${NC}"
-    read response < "$TTY_INPUT"
-    response=${response:-$default}
-    
-    case "$response" in
-        [yY][eE][sS]|[yY]) return 0 ;;
-        *) return 1 ;;
-    esac
+
+    while true; do
+        echo -en "${YELLOW}$message $prompt: ${NC}"
+        echo -e "${GRAY}    输入说明: Y=同意，N=取消，直接回车=默认(${default_upper})${NC}"
+        read response < "$TTY_INPUT"
+        response=${response:-$default}
+
+        case "$response" in
+            [yY][eE][sS]|[yY]) return 0 ;;
+            [nN][oO]|[nN]) return 1 ;;
+            *)
+                log_warn "无效输入: $response，请输入 Y 或 N"
+                ;;
+        esac
+    done
 }
 
 # ================================ 系统检测 ================================
@@ -173,6 +190,296 @@ check_command() {
     command -v "$1" &> /dev/null
 }
 
+ensure_openclaw_json_backup_dir() {
+    mkdir -p "$OPENCLAW_JSON_BACKUP_DIR"
+    chmod 700 "$OPENCLAW_JSON_BACKUP_DIR" 2>/dev/null || true
+}
+
+format_backup_time_label() {
+    local file="$1"
+    local base_name
+    local ts
+    base_name=$(basename "$file")
+    ts="${base_name#openclaw_}"
+    ts="${ts%.json}"
+
+    if [[ "$ts" =~ ^([0-9]{8})_([0-9]{6})$ ]]; then
+        local d="${BASH_REMATCH[1]}"
+        local t="${BASH_REMATCH[2]}"
+        echo "${d:0:4}-${d:4:2}-${d:6:2} ${t:0:2}:${t:2:2}:${t:4:2}"
+    else
+        echo "$base_name"
+    fi
+}
+
+backup_openclaw_json_now() {
+    if [ ! -f "$OPENCLAW_JSON" ]; then
+        return 1
+    fi
+
+    ensure_openclaw_json_backup_dir
+
+    local backup_file="$OPENCLAW_JSON_BACKUP_DIR/openclaw_$(date +%Y%m%d_%H%M%S).json"
+    cp "$OPENCLAW_JSON" "$backup_file"
+    chmod 600 "$backup_file" 2>/dev/null || true
+
+    # 保留最近 500 份备份，避免无限增长
+    local count=0
+    while IFS= read -r file; do
+        count=$((count + 1))
+        if [ "$count" -gt 500 ]; then
+            rm -f "$file" 2>/dev/null || true
+        fi
+    done < <(ls -1t "$OPENCLAW_JSON_BACKUP_DIR"/openclaw_*.json 2>/dev/null || true)
+
+    echo "$backup_file"
+    return 0
+}
+
+create_openclaw_json_backup_script() {
+    ensure_openclaw_json_backup_dir
+
+    cat > "$OPENCLAW_JSON_BACKUP_SCRIPT" << 'EOF'
+#!/bin/bash
+set -e
+
+CONFIG_DIR="$HOME/.openclaw"
+OPENCLAW_JSON="$CONFIG_DIR/openclaw.json"
+BACKUP_DIR="$CONFIG_DIR/backups/openclaw-json"
+
+mkdir -p "$BACKUP_DIR"
+[ -f "$OPENCLAW_JSON" ] || exit 0
+
+backup_file="$BACKUP_DIR/openclaw_$(date +%Y%m%d_%H%M%S).json"
+cp "$OPENCLAW_JSON" "$backup_file"
+chmod 600 "$backup_file" 2>/dev/null || true
+
+# 保留最近 500 份备份
+count=0
+while IFS= read -r file; do
+    count=$((count + 1))
+    if [ "$count" -gt 500 ]; then
+        rm -f "$file" 2>/dev/null || true
+    fi
+done < <(ls -1t "$BACKUP_DIR"/openclaw_*.json 2>/dev/null || true)
+EOF
+
+    chmod 700 "$OPENCLAW_JSON_BACKUP_SCRIPT" 2>/dev/null || true
+}
+
+remove_openclaw_json_backup_schedule() {
+    if ! check_command crontab; then
+        return 0
+    fi
+
+    (crontab -l 2>/dev/null | grep -v "$OPENCLAW_JSON_BACKUP_CRON_TAG" || true) | crontab - 2>/dev/null || true
+}
+
+validate_openclaw_json_file() {
+    if [ ! -f "$OPENCLAW_JSON" ]; then
+        return 0
+    fi
+
+    if check_command node; then
+        node -e "const fs=require('fs'); JSON.parse(fs.readFileSync(process.argv[1], 'utf8'));" "$OPENCLAW_JSON" >/dev/null 2>&1
+        return $?
+    fi
+
+    if check_command python3; then
+        python3 -c "import json,sys; json.load(open(sys.argv[1], 'r', encoding='utf-8'))" "$OPENCLAW_JSON" >/dev/null 2>&1
+        return $?
+    fi
+
+    return 0
+}
+
+run_one_click_config_repair() {
+    log_step "执行一键修复配置..."
+
+    if [ -f "$OPENCLAW_JSON" ]; then
+        backup_openclaw_json_now >/dev/null 2>&1 || true
+    fi
+
+    repair_openclaw_config_schema
+
+    if validate_openclaw_json_file; then
+        log_info "openclaw.json 语法检查通过"
+    else
+        log_warn "openclaw.json 语法检查失败，请先恢复一个有效备份"
+    fi
+
+    if check_command openclaw; then
+        local env_file="$CONFIG_DIR/env"
+        local dotenv_file="$CONFIG_DIR/.env"
+
+        clear_ai_env_vars
+        set -a
+        [ -f "$env_file" ] && source "$env_file"
+        [ -f "$dotenv_file" ] && source "$dotenv_file"
+        set +a
+
+        ensure_gateway_auth_token
+        openclaw doctor --fix >/tmp/openclaw-doctor-fix.log 2>&1 || true
+        log_info "已执行 openclaw doctor --fix（日志: /tmp/openclaw-doctor-fix.log）"
+    else
+        log_warn "未检测到 openclaw，已完成基础配置修复（schema 修复）"
+    fi
+
+    return 0
+}
+
+offer_restore_openclaw_json_backup() {
+    ensure_openclaw_json_backup_dir
+
+    local backups=()
+    while IFS= read -r file; do
+        backups+=("$file")
+    done < <(ls -1t "$OPENCLAW_JSON_BACKUP_DIR"/openclaw_*.json 2>/dev/null || true)
+
+    if [ "${#backups[@]}" -eq 0 ]; then
+        return 0
+    fi
+
+    echo ""
+    echo -e "${CYAN}检测到 ${#backups[@]} 份 openclaw.json 历史备份${NC}"
+    if ! confirm "是否现在恢复指定版本？" "n"; then
+        return 0
+    fi
+
+    echo ""
+    echo -e "${WHITE}可恢复版本列表（按时间倒序）:${NC}"
+    local i=1
+    for file in "${backups[@]}"; do
+        echo "  $i) $(format_backup_time_label "$file")  ->  $(basename "$file")"
+        i=$((i + 1))
+    done
+    echo "  0) 取消恢复"
+    echo ""
+
+    local choice=""
+    while true; do
+        echo -en "${YELLOW}请选择要恢复的版本 [0-$(( ${#backups[@]} ))]（默认: 0）：${NC}"
+        read choice < "$TTY_INPUT"
+        choice=${choice:-0}
+
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 0 ] && [ "$choice" -le "${#backups[@]}" ]; then
+            break
+        fi
+        log_warn "输入无效，请输入 0-$(( ${#backups[@]} )) 的数字"
+    done
+
+    if [ "$choice" -eq 0 ]; then
+        log_info "已取消恢复"
+        return 0
+    fi
+
+    local selected_backup="${backups[$((choice - 1))]}"
+    cp "$selected_backup" "$OPENCLAW_JSON"
+    chmod 600 "$OPENCLAW_JSON" 2>/dev/null || true
+    RESTORE_PERFORMED="true"
+    log_info "已恢复 openclaw.json: $(basename "$selected_backup")"
+
+    if confirm "是否执行一键修复配置（推荐）？" "y"; then
+        run_one_click_config_repair
+    fi
+
+    return 0
+}
+
+setup_openclaw_json_backup_schedule() {
+    log_step "配置 openclaw.json 定时备份..."
+
+    if ! confirm "是否启用 openclaw.json 定时备份？" "y"; then
+        JSON_BACKUP_ENABLED="false"
+        JSON_BACKUP_SCHEDULE="未启用"
+        if confirm "是否清理旧的定时备份任务？" "y"; then
+            remove_openclaw_json_backup_schedule
+            log_info "已清理旧的定时备份任务"
+        fi
+        return 0
+    fi
+
+    echo ""
+    echo -e "${CYAN}请选择备份频率:${NC}"
+    echo "  1) 每小时备份"
+    echo "  2) 每天备份（默认，凌晨 03:00）"
+    echo "  3) 每三天备份（凌晨 03:00）"
+    echo "  4) 每七天备份（凌晨 03:00）"
+    echo "  5) 关闭定时备份"
+    echo ""
+
+    local backup_choice
+    local cron_expr
+    local schedule_text
+    echo -en "${YELLOW}请选择 [1-5]（默认: 2）：${NC}"
+    read backup_choice < "$TTY_INPUT"
+    backup_choice=${backup_choice:-2}
+
+    case "$backup_choice" in
+        1)
+            cron_expr="0 * * * *"
+            schedule_text="每小时"
+            ;;
+        2)
+            cron_expr="0 3 * * *"
+            schedule_text="每天"
+            ;;
+        3)
+            cron_expr="0 3 */3 * *"
+            schedule_text="每三天"
+            ;;
+        4)
+            cron_expr="0 3 */7 * *"
+            schedule_text="每七天"
+            ;;
+        5)
+            remove_openclaw_json_backup_schedule
+            JSON_BACKUP_ENABLED="false"
+            JSON_BACKUP_SCHEDULE="未启用"
+            log_info "已关闭定时备份"
+            return 0
+            ;;
+        *)
+            cron_expr="0 3 * * *"
+            schedule_text="每天"
+            ;;
+    esac
+
+    create_openclaw_json_backup_script
+
+    if ! check_command crontab; then
+        JSON_BACKUP_ENABLED="false"
+        JSON_BACKUP_SCHEDULE="${schedule_text}（未写入系统计划任务）"
+        log_warn "当前系统未检测到 crontab，无法自动写入定时任务"
+        log_warn "可手动执行备份脚本: $OPENCLAW_JSON_BACKUP_SCRIPT"
+        return 0
+    fi
+
+    remove_openclaw_json_backup_schedule
+
+    local cron_line="${cron_expr} /bin/bash \"$OPENCLAW_JSON_BACKUP_SCRIPT\" >/dev/null 2>&1 # ${OPENCLAW_JSON_BACKUP_CRON_TAG}"
+    local current_cron
+    current_cron=$(crontab -l 2>/dev/null | grep -v "$OPENCLAW_JSON_BACKUP_CRON_TAG" || true)
+    {
+        [ -n "$current_cron" ] && echo "$current_cron"
+        echo "$cron_line"
+    } | crontab -
+
+    JSON_BACKUP_ENABLED="true"
+    JSON_BACKUP_SCHEDULE="$schedule_text"
+    log_info "定时备份已启用: $schedule_text"
+
+    local first_backup
+    first_backup=$(backup_openclaw_json_now || true)
+    if [ -n "$first_backup" ]; then
+        log_info "已创建首次备份: $(basename "$first_backup")"
+    else
+        log_warn "当前未找到 openclaw.json，首次备份将在文件生成后自动执行"
+    fi
+
+    return 0
+}
+
 # WebUI 访问模式（local/tailscale/public-domain）
 WEBUI_ACCESS_MODE="local"
 WEBUI_DOMAIN=""
@@ -189,6 +496,41 @@ clear_ai_env_vars() {
     unset GOOGLE_API_KEY GOOGLE_BASE_URL
     unset OLLAMA_HOST
     unset XAI_API_KEY ZAI_API_KEY MINIMAX_API_KEY OPENCODE_API_KEY
+}
+
+# 是否需要通过 custom provider 写入 openclaw.json
+# 返回 0 表示需要，返回 1 表示不需要
+should_use_custom_provider() {
+    local provider="$1"
+    local base_url="$2"
+
+    [ -n "$base_url" ] || return 1
+
+    case "$provider" in
+        anthropic|openai|azure-openai)
+            return 0
+            ;;
+        deepseek)
+            [ "$base_url" != "https://api.deepseek.com" ] && return 0
+            ;;
+        kimi)
+            [ "$base_url" != "https://api.moonshot.cn/v1" ] && return 0
+            ;;
+        groq)
+            [ "$base_url" != "https://api.groq.com/openai/v1" ] && return 0
+            ;;
+        mistral)
+            [ "$base_url" != "https://api.mistral.ai/v1" ] && return 0
+            ;;
+        openrouter)
+            [ "$base_url" != "https://openrouter.ai/api/v1" ] && return 0
+            ;;
+        opencode)
+            [ "$base_url" != "https://api.opencode.ai/v1" ] && return 0
+            ;;
+    esac
+
+    return 1
 }
 
 # 修复历史遗留的无效配置键（models.default）
@@ -656,6 +998,7 @@ create_directories() {
     log_step "创建配置目录..."
     
     mkdir -p "$CONFIG_DIR"
+    ensure_openclaw_json_backup_dir
     
     log_info "配置目录: $CONFIG_DIR"
 }
@@ -815,20 +1158,37 @@ EOF
         local use_custom_provider=false
         
         # 如果使用自定义 BASE_URL，需要配置自定义 provider
-        if [ -n "$BASE_URL" ] && [ "$AI_PROVIDER" = "anthropic" ]; then
+        if should_use_custom_provider "$AI_PROVIDER" "$BASE_URL"; then
             use_custom_provider=true
-            configure_custom_provider "$AI_PROVIDER" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json"
-            openclaw_model="anthropic-custom/$AI_MODEL"
-        elif [ -n "$BASE_URL" ] && [ "$AI_PROVIDER" = "openai" ]; then
-            use_custom_provider=true
-            # 传递 API 类型参数（如果已设置）
-            configure_custom_provider "$AI_PROVIDER" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json" "$AI_API_TYPE"
-            openclaw_model="openai-custom/$AI_MODEL"
-        elif [ -n "$BASE_URL" ] && [ "$AI_PROVIDER" = "azure-openai" ]; then
-            use_custom_provider=true
-            configure_custom_provider "openai" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json" "openai-completions"
-            openclaw_model="openai-custom/$AI_MODEL"
-        else
+            local custom_provider_name=""
+            local custom_api_type=""
+
+            case "$AI_PROVIDER" in
+                anthropic)
+                    custom_provider_name="anthropic"
+                    custom_api_type="anthropic-messages"
+                    ;;
+                openai)
+                    custom_provider_name="openai"
+                    custom_api_type="${AI_API_TYPE:-openai-completions}"
+                    ;;
+                azure-openai)
+                    custom_provider_name="openai"
+                    custom_api_type="openai-completions"
+                    ;;
+                deepseek|kimi|groq|mistral|openrouter|opencode)
+                    custom_provider_name="$AI_PROVIDER"
+                    custom_api_type="openai-completions"
+                    ;;
+            esac
+
+            if [ -n "$custom_provider_name" ]; then
+                configure_custom_provider "$custom_provider_name" "$AI_KEY" "$AI_MODEL" "$BASE_URL" "$openclaw_json" "$custom_api_type"
+                openclaw_model="${custom_provider_name}-custom/$AI_MODEL"
+            fi
+        fi
+
+        if [ -z "$openclaw_model" ]; then
             case "$AI_PROVIDER" in
                 anthropic)
                     openclaw_model="anthropic/$AI_MODEL"
@@ -978,8 +1338,7 @@ configure_custom_provider() {
     if [ -f "$config_file" ]; then
         # 检查是否有旧的自定义 provider 配置
         local has_old_config="false"
-        if grep -q '"anthropic-custom"' "$config_file" 2>/dev/null || \
-           grep -q '"openai-custom"' "$config_file" 2>/dev/null; then
+        if grep -q -- '-custom"' "$config_file" 2>/dev/null; then
             has_old_config="true"
         fi
         
@@ -1057,17 +1416,23 @@ if (!config.models.providers) config.models.providers = {};
 
 // 根据用户选择决定是否清理旧配置
 if (vars.do_cleanup === 'true') {
-    delete config.models.providers['anthropic-custom'];
-    delete config.models.providers['openai-custom'];
+    for (const id of Object.keys(config.models.providers || {})) {
+        if (id.endsWith('-custom')) {
+            delete config.models.providers[id];
+        }
+    }
     if (config.models.configured) {
-        config.models.configured = config.models.configured.filter(m => {
-            if (m.startsWith('openai/claude')) return false;
-            if (m.startsWith('openrouter/claude') && !m.includes('openrouter.ai')) return false;
-            return true;
-        });
+        config.models.configured = config.models.configured.filter(
+            m => !/^[^/]+-custom\//.test(m)
+        );
     }
     if (config.models.aliases) {
-        delete config.models.aliases['claude-custom'];
+        for (const alias of Object.keys(config.models.aliases)) {
+            const aliasTarget = config.models.aliases[alias];
+            if ((typeof aliasTarget === 'string' && /^[^/]+-custom\//.test(aliasTarget)) || alias.includes('custom')) {
+                delete config.models.aliases[alias];
+            }
+        }
     }
     console.log('Old configurations cleaned up');
 }
@@ -1144,16 +1509,29 @@ if 'providers' not in config['models']:
 
 # 根据用户选择决定是否清理旧配置
 if vars['do_cleanup'] == 'true':
-    config['models']['providers'].pop('anthropic-custom', None)
-    config['models']['providers'].pop('openai-custom', None)
+    for provider_id in list(config['models']['providers'].keys()):
+        if provider_id.endswith('-custom'):
+            config['models']['providers'].pop(provider_id, None)
     if 'configured' in config['models']:
         config['models']['configured'] = [
             m for m in config['models']['configured']
-            if not (m.startswith('openai/claude') or 
-                    (m.startswith('openrouter/claude') and 'openrouter.ai' not in m))
+            if not (
+                isinstance(m, str)
+                and '/' in m
+                and m.split('/', 1)[0].endswith('-custom')
+            )
         ]
     if 'aliases' in config['models']:
-        config['models']['aliases'].pop('claude-custom', None)
+        for alias, target in list(config['models']['aliases'].items()):
+            if (
+                'custom' in alias
+                or (
+                    isinstance(target, str)
+                    and '/' in target
+                    and target.split('/', 1)[0].endswith('-custom')
+                )
+            ):
+                config['models']['aliases'].pop(alias, None)
     print('Old configurations cleaned up')
 
 config['models']['providers'][vars['provider_id']] = {
@@ -1471,10 +1849,9 @@ setup_ai_provider() {
             ;;
         14)
             AI_PROVIDER="minimax"
-            echo -en "${YELLOW}Use minimax-cn? [y/N]: ${NC}"; read minimax_cn < "$TTY_INPUT"
-            case "$minimax_cn" in
-                y|Y|yes|YES) AI_PROVIDER="minimax-cn" ;;
-            esac
+            if confirm "是否使用 minimax-cn？" "n"; then
+                AI_PROVIDER="minimax-cn"
+            fi
             echo -en "${YELLOW}API Key: ${NC}"; read AI_KEY < "$TTY_INPUT"
             echo -en "${YELLOW}模型 ID（默认: MiniMax-M2.1，请填英文）: ${NC}"; read AI_MODEL < "$TTY_INPUT"
             AI_MODEL=${AI_MODEL:-"MiniMax-M2.1"}
@@ -1827,6 +2204,16 @@ print_success() {
             ;;
     esac
     echo ""
+
+    echo -e "${CYAN}配置备份提示:${NC}"
+    echo "  备份目录: ~/.openclaw/backups/openclaw-json/"
+    if [ "$JSON_BACKUP_ENABLED" = "true" ]; then
+        echo "  定时备份: 已启用（$JSON_BACKUP_SCHEDULE）"
+        echo "  恢复方式: 重新执行 install.sh 可交互恢复指定版本"
+    else
+        echo "  定时备份: 未启用（可在安装流程中开启）"
+    fi
+    echo ""
 }
 
 # 启动 OpenClaw Gateway 服务
@@ -1995,9 +2382,16 @@ main() {
     check_root
     install_dependencies
     create_directories
+    offer_restore_openclaw_json_backup
+    if [ "$RESTORE_PERFORMED" != "true" ] && [ -f "$OPENCLAW_JSON" ]; then
+        if confirm "检测到现有配置，是否执行一键修复配置？" "n"; then
+            run_one_click_config_repair
+        fi
+    fi
     install_openclaw
     run_onboard_wizard
     setup_webui_access
+    setup_openclaw_json_backup_schedule
     setup_daemon
     print_success
     
