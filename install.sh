@@ -1924,19 +1924,19 @@ test_api_connection() {
         local exit_code
         
         # 使用 timeout 命令（如果可用），否则直接运行
-        # 注意：添加 || true 防止 set -e 导致脚本退出
+        # 临时关闭 set -e，保留真实退出码，避免把失败误判为成功
+        set +e
         if command -v timeout &> /dev/null; then
-            result=$(timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
-            exit_code=${PIPESTATUS[0]}
-            # 如果 exit_code 为空，从 $? 获取（兼容不同 shell）
-            [ -z "$exit_code" ] && exit_code=$?
+            result=$(timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
+            exit_code=$?
             if [ "$exit_code" = "124" ]; then
                 result="测试超时（30秒）"
             fi
         else
-            result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1) || true
+            result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
             exit_code=$?
         fi
+        set -e
         
         # 过滤掉 Node.js 警告信息和正常的系统日志
         result=$(echo "$result" | grep -v "ExperimentalWarning" | grep -v "at emitExperimentalWarning" | grep -v "at ModuleLoader" | grep -v "at callTranslator")
@@ -1944,8 +1944,8 @@ test_api_connection() {
         # 保存原始结果用于显示
         local display_result="$result"
         
-        # 过滤掉正常的插件加载日志和 Doctor warnings 用于错误判断
-        local filtered_result=$(echo "$result" | grep -v "\[plugins\]" | grep -v "Doctor warnings" | grep -v "Registered.*tools" | grep -v "State dir migration" | grep -v "^│" | grep -v "^◇" | grep -v "^$")
+        # 过滤掉正常日志用于错误判断；保留插件失败类错误，避免误判
+        local filtered_result=$(echo "$result" | grep -v "Doctor warnings" | grep -v "Registered.*tools" | grep -v "State dir migration" | grep -v "^│" | grep -v "^◇" | grep -v "^$")
         
         # 检查结果是否为空
         if [ -z "$filtered_result" ]; then
@@ -1966,7 +1966,7 @@ test_api_connection() {
         
         # 判断是否成功：退出码为 0 且没有真正的错误信息
         # 注意：只匹配真正的错误，排除正常日志
-        if [ $exit_code -eq 0 ] && ! echo "$filtered_result" | grep -qiE "^error:|api error|401|403|Unknown model|超时|Incorrect API|authentication failed"; then
+        if [ $exit_code -eq 0 ] && ! echo "$filtered_result" | grep -qiE "^error:|api error|401|403|Unknown model|超时|Incorrect API|authentication failed|failed to load|Cannot find module"; then
             test_passed=true
             echo -e "${GREEN}✓ OpenClaw AI 测试成功！${NC}"
             echo ""

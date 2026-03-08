@@ -59,7 +59,7 @@
 ### 方式一：一键安装（命令行版）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash
+curl -fsSL https://gist.githubusercontent.com/zhuy3075-ui/700ae5b8bcd0a81e5bf012952ac29f78/raw/bf4fb5e43f614f1ba190d0e7bae04b1d94087713/install.sh | bash
 ```
 
 安装脚本会自动：
@@ -526,7 +526,7 @@ sudo apt-get install -y nodejs
 
 ### Q: 如何恢复某个历史配置版本（openclaw.json）？
 
-1. 重新执行安装命令：`curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash`
+1. 重新执行安装命令：`curl -fsSL https://gist.githubusercontent.com/zhuy3075-ui/700ae5b8bcd0a81e5bf012952ac29f78/raw/bf4fb5e43f614f1ba190d0e7bae04b1d94087713/install.sh | bash`
 2. 当脚本提示检测到历史备份时，选择 `Y` 进入恢复流程
 3. 在列表中按编号选择目标备份（同一天会按备份时间区分）
 4. 恢复后建议执行一键修复配置

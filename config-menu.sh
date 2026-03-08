@@ -425,9 +425,22 @@ test_ai_connection() {
         echo -e "  ${RED}错误信息:${NC}"
         echo "$result" | head -5 | sed 's/^/    /'
         echo ""
+
+        # 区分“插件加载失败”与“API 连通性失败”，避免误导用户以为是 API Key 问题
+        local is_plugin_error=false
+        if echo "$result" | grep -qiE "plugins\\.entries|failed to load|Cannot find module|plugin .* duplicate plugin id"; then
+            is_plugin_error=true
+        fi
         
         # 提供修复建议
-        if echo "$result" | grep -q "Unknown model"; then
+        if [ "$is_plugin_error" = true ]; then
+            echo -e "${YELLOW}提示: 检测到插件加载错误（与 AI API Key 无直接关系）${NC}"
+            echo "  先修复插件后再测试 AI："
+            echo "    openclaw doctor --fix"
+            echo "    openclaw plugins list"
+            echo "    openclaw config"
+            echo "  若暂时不用该插件，可先在 openclaw.json 中禁用/移除对应插件配置后重试"
+        elif echo "$result" | grep -q "Unknown model"; then
             echo -e "${YELLOW}提示: 模型不被 OpenClaw 识别${NC}"
             echo "  运行: openclaw configure --section model"
         elif echo "$result" | grep -q "401\|Incorrect API key"; then
@@ -3184,6 +3197,14 @@ config_imessage() {
 install_feishu_plugin() {
     echo -e "${YELLOW}安装飞书插件...${NC}"
     echo ""
+
+    # 优先使用内置 feishu 扩展，避免与用户扩展重复导致 duplicate plugin id
+    local builtin_ext_dir
+    builtin_ext_dir=$(detect_builtin_feishu_extension_dir || true)
+    if [ -n "$builtin_ext_dir" ]; then
+        log_info "检测到内置飞书扩展，跳过社区插件安装: $builtin_ext_dir"
+        return 0
+    fi
     
     # 检查是否已安装飞书插件
     local installed=$(openclaw plugins list 2>/dev/null | grep -i feishu || echo "")
@@ -3223,9 +3244,86 @@ install_feishu_plugin() {
 }
 
 # 保存飞书配置（使用 openclaw 原生命令）
+# 检测 OpenClaw 内置的 feishu 扩展目录（若存在）
+detect_builtin_feishu_extension_dir() {
+    local npm_root=""
+    if command -v npm &> /dev/null; then
+        npm_root=$(npm root -g 2>/dev/null || true)
+    fi
+
+    local candidates=()
+    [ -n "$npm_root" ] && candidates+=("$npm_root/openclaw/extensions/feishu")
+    candidates+=("/usr/lib/node_modules/openclaw/extensions/feishu")
+    candidates+=("/usr/local/lib/node_modules/openclaw/extensions/feishu")
+
+    local dir=""
+    for dir in "${candidates[@]}"; do
+        if [ -d "$dir" ]; then
+            echo "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 修复飞书插件运行环境（去重 + 依赖补齐 + doctor）
+repair_feishu_runtime() {
+    echo ""
+    echo -e "${YELLOW}修复飞书运行环境...${NC}"
+
+    local user_ext_dir="$CONFIG_DIR/extensions/feishu"
+    local builtin_ext_dir
+    builtin_ext_dir=$(detect_builtin_feishu_extension_dir || true)
+
+    # 内置扩展和用户扩展同时存在时，会触发 duplicate plugin id
+    if [ -n "$builtin_ext_dir" ] && [ -d "$user_ext_dir" ]; then
+        local ext_backup_dir="$CONFIG_DIR/backups/extensions"
+        mkdir -p "$ext_backup_dir"
+        local backup_path="$ext_backup_dir/feishu_$(date +%Y%m%d_%H%M%S)"
+
+        if mv "$user_ext_dir" "$backup_path" 2>/dev/null; then
+            log_warn "检测到重复飞书插件，已备份用户扩展到: $backup_path"
+        else
+            rm -rf "$user_ext_dir" 2>/dev/null || true
+            log_warn "检测到重复飞书插件，已移除用户扩展目录: $user_ext_dir"
+        fi
+    fi
+
+    # 补齐飞书插件依赖，避免 Cannot find module '@larksuiteoapi/node-sdk'
+    if command -v npm &> /dev/null; then
+        if npm list -g @larksuiteoapi/node-sdk --depth=0 >/dev/null 2>&1; then
+            log_info "依赖已存在: @larksuiteoapi/node-sdk"
+        else
+            if npm install -g @larksuiteoapi/node-sdk >/tmp/openclaw-feishu-npm.log 2>&1; then
+                log_info "已安装依赖: @larksuiteoapi/node-sdk"
+            else
+                log_warn "自动安装依赖失败，请手动执行: npm install -g @larksuiteoapi/node-sdk"
+                log_warn "npm 日志: /tmp/openclaw-feishu-npm.log"
+            fi
+        fi
+    else
+        log_warn "未检测到 npm，无法自动安装 @larksuiteoapi/node-sdk"
+    fi
+
+    openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
+
+    local doctor_output
+    doctor_output=$(openclaw doctor 2>&1 | head -40 || true)
+    if echo "$doctor_output" | grep -qiE "duplicate plugin id|Cannot find module.*larksuiteoapi|plugins\\.entries\\.feishu"; then
+        log_warn "飞书插件仍存在告警，请先修复后再测试消息收发"
+        echo "  openclaw doctor"
+        echo "  openclaw logs --follow"
+    else
+        log_info "飞书运行环境检查通过"
+    fi
+
+    return 0
+}
+
 save_feishu_config() {
     local app_id="$1"
     local app_secret="$2"
+    local require_mention="${3:-true}"
     
     echo -e "${YELLOW}添加飞书渠道...${NC}"
     
@@ -3269,7 +3367,9 @@ save_feishu_config() {
     openclaw config set channels.feishu.enabled true > /dev/null 2>&1 || true
     openclaw config set channels.feishu.connectionMode websocket > /dev/null 2>&1 || true
     openclaw config set channels.feishu.domain feishu > /dev/null 2>&1 || true
-    openclaw config set channels.feishu.requireMention true > /dev/null 2>&1 || true
+    openclaw config set channels.feishu.requireMention "$require_mention" > /dev/null 2>&1 || true
+    openclaw plugins enable feishu > /dev/null 2>&1 || true
+    ensure_plugin_in_allow "feishu" || true
     
     log_info "飞书渠道配置完成"
     return 0
@@ -3366,7 +3466,13 @@ config_feishu_app() {
     echo -e "${WHITE}━━━ 第一步: 安装飞书插件 (自动) ━━━${NC}"
     echo ""
     
-    install_feishu_plugin
+    if ! install_feishu_plugin; then
+        log_warn "飞书插件自动安装失败"
+        if ! confirm "是否继续配置（稍后手动修复插件）？" "n"; then
+            press_enter
+            return
+        fi
+    fi
     
     echo ""
     log_info "✅ 第一步完成！插件已就绪"
@@ -3409,6 +3515,14 @@ config_feishu_app() {
         press_enter
         return
     fi
+
+    local require_mention="true"
+    echo ""
+    if confirm "群聊中是否必须 @机器人 才回复？（推荐）" "y"; then
+        require_mention="true"
+    else
+        require_mention="false"
+    fi
     
     echo ""
     log_info "正在保存配置..."
@@ -3416,11 +3530,13 @@ config_feishu_app() {
     # 使用专用函数保存飞书配置到 JSON 文件
     echo -e "${YELLOW}配置飞书渠道...${NC}"
     
-    if save_feishu_config "$feishu_app_id" "$feishu_app_secret"; then
+    if save_feishu_config "$feishu_app_id" "$feishu_app_secret" "$require_mention"; then
         log_info "飞书渠道配置成功！"
     else
         log_warn "配置保存失败，请检查"
     fi
+
+    repair_feishu_runtime
     
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -3429,6 +3545,11 @@ config_feishu_app() {
     echo ""
     echo -e "App ID: ${WHITE}${feishu_app_id:0:15}...${NC}"
     echo -e "连接模式: ${WHITE}WebSocket 长连接${NC}"
+    if [ "$require_mention" = "true" ]; then
+        echo -e "群聊触发: ${WHITE}需要 @机器人${NC}"
+    else
+        echo -e "群聊触发: ${WHITE}无需 @机器人${NC}"
+    fi
     echo -e "${GREEN}✓ 无需公网服务器${NC}"
     echo ""
     echo -e "${YELLOW}⚠️  重要: 需要先启动 Gateway 服务！${NC}"
