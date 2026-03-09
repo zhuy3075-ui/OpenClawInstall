@@ -125,6 +125,73 @@ confirm() {
     esac
 }
 
+# 显式运行命令并打印心跳，避免长时间无输出被误判为“卡死”
+# 参数: 标题 命令字符串 日志文件(可空) 超时秒数(0=不限制) 心跳间隔(默认3秒)
+run_command_with_heartbeat() {
+    local title="$1"
+    local cmd="$2"
+    local log_file="$3"
+    local timeout_seconds="${4:-0}"
+    local heartbeat_seconds="${5:-3}"
+    local start_ts
+
+    start_ts=$(date +%s)
+    echo -e "${CYAN}▶ ${title}${NC}"
+    echo -e "${GRAY}  命令: ${cmd}${NC}"
+    if [ -n "$log_file" ]; then
+        mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+        : > "$log_file"
+        echo -e "${GRAY}  日志: ${log_file}${NC}"
+    fi
+
+    if [ "$timeout_seconds" -gt 0 ] && command -v timeout &> /dev/null; then
+        if [ -n "$log_file" ]; then
+            timeout "$timeout_seconds" bash -lc "$cmd" >"$log_file" 2>&1 &
+        else
+            timeout "$timeout_seconds" bash -lc "$cmd" &
+        fi
+    else
+        if [ -n "$log_file" ]; then
+            bash -lc "$cmd" >"$log_file" 2>&1 &
+        else
+            bash -lc "$cmd" &
+        fi
+    fi
+
+    local cmd_pid=$!
+    local waited=0
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        echo -e "${GRAY}  ...仍在执行（${waited}s），请稍候${NC}"
+        sleep "$heartbeat_seconds"
+        waited=$((waited + heartbeat_seconds))
+    done
+
+    wait "$cmd_pid"
+    local exit_code=$?
+    local total_cost=$(( $(date +%s) - start_ts ))
+
+    if [ "$exit_code" -eq 0 ]; then
+        log_info "${title}完成（耗时 ${total_cost}s）"
+        return 0
+    fi
+
+    if [ "$exit_code" -eq 124 ]; then
+        log_warn "${title}超时（${timeout_seconds}s），触发超时保护，不是卡死"
+    else
+        log_warn "${title}执行失败（exit=${exit_code}，耗时 ${total_cost}s）"
+    fi
+
+    if [ -n "$log_file" ]; then
+        log_warn "详情日志: $log_file"
+        if [ -s "$log_file" ]; then
+            echo -e "${GRAY}日志最后 8 行:${NC}"
+            tail -8 "$log_file" | sed 's/^/  /'
+        fi
+    fi
+
+    return "$exit_code"
+}
+
 # 检查依赖
 check_dependencies() {
     if ! command -v yq &> /dev/null; then
@@ -301,7 +368,7 @@ restart_gateway_for_channel() {
     
     # 先运行 doctor --fix 确保配置有效
     echo -e "${YELLOW}检查配置...${NC}"
-    yes | openclaw doctor --fix > /dev/null 2>&1 || true
+    run_command_with_heartbeat "运行 openclaw doctor --fix（重启前）" "yes | openclaw doctor --fix" "/tmp/openclaw-doctor-restart.log" 45 || true
     
     # 显式注入 env 后重启，避免后台进程读取不到 API Key
     local restart_output=""
@@ -394,14 +461,22 @@ test_ai_connection() {
     openclaw models status 2>&1 | grep -E "Default|Auth|effective" | head -5
     echo ""
     
-    # 使用 openclaw agent --local 测试
+    # 使用 openclaw agent --local 测试（显式运行，避免看起来卡死）
     echo -e "${YELLOW}运行 openclaw agent --local 测试...${NC}"
     echo ""
     
     local result
-    # Keep the real exit code, avoid false-positive API test pass.
-    result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
-    local exit_code=$?
+    local exit_code
+    local test_log_file="/tmp/openclaw-agent-test.log"
+    if run_command_with_heartbeat "执行 openclaw agent 连通性测试（最长 30 秒）" "openclaw agent --local --to '+1234567890' --message '回复 OK'" "$test_log_file" 30; then
+        exit_code=0
+    else
+        exit_code=$?
+    fi
+    result=$(cat "$test_log_file" 2>/dev/null || true)
+    if [ "$exit_code" = "124" ]; then
+        result="测试超时（30秒）"
+    fi
     
     # 过滤掉 Node.js 警告信息和 JavaScript 错误
     result=$(echo "$result" | grep -v "ExperimentalWarning" | grep -v "at emitExperimentalWarning" | grep -v "at ModuleLoader" | grep -v "at callTranslator" | grep -v "Cannot read properties of undefined" | grep -v "TypeError:" | grep -v "ReferenceError:")
@@ -3275,6 +3350,7 @@ repair_feishu_runtime() {
     local builtin_ext_dir
     builtin_ext_dir=$(detect_builtin_feishu_extension_dir || true)
 
+    echo -e "${CYAN}第一步/四步：检查重复插件冲突...${NC}"
     # 内置扩展和用户扩展同时存在时，会触发 duplicate plugin id
     if [ -n "$builtin_ext_dir" ] && [ -d "$user_ext_dir" ]; then
         local ext_backup_dir="$CONFIG_DIR/backups/extensions"
@@ -3289,12 +3365,13 @@ repair_feishu_runtime() {
         fi
     fi
 
+    echo -e "${CYAN}第二步/四步：补齐飞书依赖...${NC}"
     # 补齐飞书插件依赖，避免 Cannot find module '@larksuiteoapi/node-sdk'
     if command -v npm &> /dev/null; then
         if npm list -g @larksuiteoapi/node-sdk --depth=0 >/dev/null 2>&1; then
             log_info "依赖已存在: @larksuiteoapi/node-sdk"
         else
-            if npm install -g @larksuiteoapi/node-sdk >/tmp/openclaw-feishu-npm.log 2>&1; then
+            if run_command_with_heartbeat "安装依赖 @larksuiteoapi/node-sdk" "npm install -g @larksuiteoapi/node-sdk" "/tmp/openclaw-feishu-npm.log" 0; then
                 log_info "已安装依赖: @larksuiteoapi/node-sdk"
             else
                 log_warn "自动安装依赖失败，请手动执行: npm install -g @larksuiteoapi/node-sdk"
@@ -3305,18 +3382,15 @@ repair_feishu_runtime() {
         log_warn "未检测到 npm，无法自动安装 @larksuiteoapi/node-sdk"
     fi
 
-    # doctor --fix 可能进入交互，使用 yes 管道并增加超时，避免卡死
-    if command -v timeout &> /dev/null; then
-        yes | timeout 30 openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
-    else
-        yes | openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
-    fi
+    echo -e "${CYAN}第三步/四步：执行 doctor --fix（最长 30 秒）...${NC}"
+    run_command_with_heartbeat "修复飞书配置（doctor --fix）" "yes | openclaw doctor --fix" "/tmp/openclaw-feishu-doctor-fix.log" 30 || true
 
+    echo -e "${CYAN}第四步/四步：校验修复结果...${NC}"
     local doctor_output
-    if command -v timeout &> /dev/null; then
-        doctor_output=$(timeout 20 openclaw doctor 2>&1 | head -40 || true)
+    if run_command_with_heartbeat "执行 openclaw doctor 校验（最长 20 秒）" "openclaw doctor" "/tmp/openclaw-feishu-doctor-check.log" 20; then
+        doctor_output=$(cat /tmp/openclaw-feishu-doctor-check.log 2>/dev/null | head -40 || true)
     else
-        doctor_output=$(openclaw doctor 2>&1 | head -40 || true)
+        doctor_output=$(cat /tmp/openclaw-feishu-doctor-check.log 2>/dev/null | head -40 || true)
     fi
     if echo "$doctor_output" | grep -qiE "duplicate plugin id|Cannot find module.*larksuiteoapi|plugins\\.entries\\.feishu"; then
         log_warn "飞书插件仍存在告警，请先修复后再测试消息收发"
@@ -3851,7 +3925,7 @@ manage_service() {
                 
                 # 先运行 doctor --fix 确保配置有效（与重启保持一致）
                 log_info "检查并修复配置..."
-                yes | openclaw doctor --fix > /dev/null 2>&1 || true
+                run_command_with_heartbeat "运行 openclaw doctor --fix（启动前）" "yes | openclaw doctor --fix" "/tmp/openclaw-doctor-start.log" 45 || true
                 
                 # 验证修复后的配置
                 local config_check=$(openclaw doctor 2>&1 | head -5)

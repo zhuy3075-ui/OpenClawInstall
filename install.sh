@@ -102,6 +102,80 @@ spinner() {
     printf "    \b\b\b\b"
 }
 
+# 显式运行命令并打印心跳，避免用户误以为“卡死”
+# 参数: 标题 命令字符串 日志文件(可空) 超时秒数(0=不限制) 心跳间隔(默认3秒)
+run_command_with_heartbeat() {
+    local title="$1"
+    local cmd="$2"
+    local log_file="$3"
+    local timeout_seconds="${4:-0}"
+    local heartbeat_seconds="${5:-3}"
+    local start_ts
+    local had_errexit=0
+
+    case "$-" in
+        *e*) had_errexit=1 ;;
+    esac
+
+    start_ts=$(date +%s)
+    echo -e "${CYAN}▶ ${title}${NC}"
+    echo -e "${GRAY}  命令: ${cmd}${NC}"
+    if [ -n "$log_file" ]; then
+        mkdir -p "$(dirname "$log_file")" 2>/dev/null || true
+        : > "$log_file"
+        echo -e "${GRAY}  日志: ${log_file}${NC}"
+    fi
+
+    set +e
+    if [ "$timeout_seconds" -gt 0 ] && command -v timeout &> /dev/null; then
+        if [ -n "$log_file" ]; then
+            timeout "$timeout_seconds" bash -lc "$cmd" >"$log_file" 2>&1 &
+        else
+            timeout "$timeout_seconds" bash -lc "$cmd" &
+        fi
+    else
+        if [ -n "$log_file" ]; then
+            bash -lc "$cmd" >"$log_file" 2>&1 &
+        else
+            bash -lc "$cmd" &
+        fi
+    fi
+
+    local cmd_pid=$!
+    local waited=0
+    while kill -0 "$cmd_pid" 2>/dev/null; do
+        echo -e "${GRAY}  ...仍在执行（${waited}s），请稍候${NC}"
+        sleep "$heartbeat_seconds"
+        waited=$((waited + heartbeat_seconds))
+    done
+
+    wait "$cmd_pid"
+    local exit_code=$?
+    [ "$had_errexit" -eq 1 ] && set -e
+
+    local total_cost=$(( $(date +%s) - start_ts ))
+    if [ "$exit_code" -eq 0 ]; then
+        log_info "${title}完成（耗时 ${total_cost}s）"
+        return 0
+    fi
+
+    if [ "$exit_code" -eq 124 ]; then
+        log_warn "${title}超时（${timeout_seconds}s），触发超时保护，不是卡死"
+    else
+        log_warn "${title}执行失败（exit=${exit_code}，耗时 ${total_cost}s）"
+    fi
+
+    if [ -n "$log_file" ]; then
+        log_warn "详情日志: $log_file"
+        if [ -s "$log_file" ]; then
+            echo -e "${GRAY}日志最后 8 行:${NC}"
+            tail -8 "$log_file" | sed 's/^/  /'
+        fi
+    fi
+
+    return "$exit_code"
+}
+
 # 从 TTY 读取用户输入（支持 curl | bash 模式）
 read_input() {
     local prompt="$1"
@@ -319,8 +393,11 @@ run_one_click_config_repair() {
         set +a
 
         ensure_gateway_auth_token
-        openclaw doctor --fix >/tmp/openclaw-doctor-fix.log 2>&1 || true
-        log_info "已执行 openclaw doctor --fix（日志: /tmp/openclaw-doctor-fix.log）"
+        if run_command_with_heartbeat "执行 openclaw doctor --fix" "yes | openclaw doctor --fix" "/tmp/openclaw-doctor-fix.log" 45; then
+            log_info "openclaw doctor --fix 执行完成（日志: /tmp/openclaw-doctor-fix.log）"
+        else
+            log_warn "openclaw doctor --fix 未完全成功，请查看日志: /tmp/openclaw-doctor-fix.log"
+        fi
     else
         log_warn "未检测到 openclaw，已完成基础配置修复（schema 修复）"
     fi
@@ -1018,7 +1095,10 @@ install_openclaw() {
     
     # 使用 npm 全局安装
     log_info "正在从 npm 安装 OpenClaw..."
-    npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm
+    if ! run_command_with_heartbeat "安装 OpenClaw npm 包" "npm install -g openclaw@$OPENCLAW_VERSION --unsafe-perm" "/tmp/openclaw-npm-install.log" 0; then
+        log_error "OpenClaw 安装失败，请查看日志: /tmp/openclaw-npm-install.log"
+        exit 1
+    fi
     
     # 验证安装
     if check_command openclaw; then
@@ -1923,21 +2003,18 @@ test_api_connection() {
         local result
         local exit_code
         
-        # 使用 timeout 命令（如果可用），否则直接运行
-        # 临时关闭 set -e，保留真实退出码，避免把失败误判为成功
-        set +e
-        if command -v timeout &> /dev/null; then
-            result=$(timeout 30 openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
-            exit_code=$?
-            if [ "$exit_code" = "124" ]; then
-                result="测试超时（30秒）"
-            fi
+        # 显式显示测试执行状态，避免 30 秒无输出时被误认为卡死
+        local test_log_file="/tmp/openclaw-agent-test.log"
+        if run_command_with_heartbeat "执行 openclaw agent 连通性测试（最长 30 秒）" "openclaw agent --local --to '+1234567890' --message '回复 OK'" "$test_log_file" 30; then
+            exit_code=0
         else
-            result=$(openclaw agent --local --to "+1234567890" --message "回复 OK" 2>&1)
             exit_code=$?
         fi
-        set -e
-        
+        result=$(cat "$test_log_file" 2>/dev/null || true)
+        if [ "$exit_code" = "124" ]; then
+            result="测试超时（30秒）"
+        fi
+
         # 过滤掉 Node.js 警告信息和正常的系统日志
         result=$(echo "$result" | grep -v "ExperimentalWarning" | grep -v "at emitExperimentalWarning" | grep -v "at ModuleLoader" | grep -v "at callTranslator")
         
