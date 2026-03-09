@@ -11,7 +11,7 @@
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 #
 # 使用方法:
-#   curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash
+#   curl -fsSL https://gist.githubusercontent.com/zhuy3075-ui/700ae5b8bcd0a81e5bf012952ac29f78/raw/d50ea95940b22d85c3099ea2c1aebb1e3ef9d843/install.sh | bash
 #   或本地执行: chmod +x install.sh && ./install.sh
 #
 

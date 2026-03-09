@@ -3305,10 +3305,19 @@ repair_feishu_runtime() {
         log_warn "未检测到 npm，无法自动安装 @larksuiteoapi/node-sdk"
     fi
 
-    openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
+    # doctor --fix 可能进入交互，使用 yes 管道并增加超时，避免卡死
+    if command -v timeout &> /dev/null; then
+        yes | timeout 30 openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
+    else
+        yes | openclaw doctor --fix >/tmp/openclaw-feishu-doctor-fix.log 2>&1 || true
+    fi
 
     local doctor_output
-    doctor_output=$(openclaw doctor 2>&1 | head -40 || true)
+    if command -v timeout &> /dev/null; then
+        doctor_output=$(timeout 20 openclaw doctor 2>&1 | head -40 || true)
+    else
+        doctor_output=$(openclaw doctor 2>&1 | head -40 || true)
+    fi
     if echo "$doctor_output" | grep -qiE "duplicate plugin id|Cannot find module.*larksuiteoapi|plugins\\.entries\\.feishu"; then
         log_warn "飞书插件仍存在告警，请先修复后再测试消息收发"
         echo "  openclaw doctor"
@@ -4174,7 +4183,7 @@ manage_service() {
             echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
             echo ""
             echo -e "${CYAN}如需重新安装，请运行:${NC}"
-            echo "  curl -fsSL https://raw.githubusercontent.com/zhuy3075-ui/OpenClawInstall/main/install.sh | bash"
+            echo "  curl -fsSL https://gist.githubusercontent.com/zhuy3075-ui/700ae5b8bcd0a81e5bf012952ac29f78/raw/d50ea95940b22d85c3099ea2c1aebb1e3ef9d843/install.sh | bash"
             echo ""
             echo -e "${CYAN}或下载桌面版:${NC}"
             echo "  https://github.com/zhuy3075-ui/OpenClawInstall"
