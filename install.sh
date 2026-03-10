@@ -129,15 +129,15 @@ run_command_with_heartbeat() {
     set +e
     if [ "$timeout_seconds" -gt 0 ] && command -v timeout &> /dev/null; then
         if [ -n "$log_file" ]; then
-            timeout "$timeout_seconds" bash -lc "$cmd" >"$log_file" 2>&1 &
+            timeout "$timeout_seconds" bash -lc "$cmd" </dev/null >"$log_file" 2>&1 &
         else
-            timeout "$timeout_seconds" bash -lc "$cmd" &
+            timeout "$timeout_seconds" bash -lc "$cmd" </dev/null &
         fi
     else
         if [ -n "$log_file" ]; then
-            bash -lc "$cmd" >"$log_file" 2>&1 &
+            bash -lc "$cmd" </dev/null >"$log_file" 2>&1 &
         else
-            bash -lc "$cmd" &
+            bash -lc "$cmd" </dev/null &
         fi
     fi
 

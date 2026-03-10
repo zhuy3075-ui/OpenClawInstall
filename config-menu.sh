@@ -34,20 +34,20 @@ read_input() {
 }
 
 # ================================ 颜色定义 ================================
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[1;37m'
-GRAY='\033[0;90m'
-NC='\033[0m'
+RED=$'\033[0;31m'
+GREEN=$'\033[0;32m'
+YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m'
+PURPLE=$'\033[0;35m'
+CYAN=$'\033[0;36m'
+WHITE=$'\033[1;37m'
+GRAY=$'\033[0;90m'
+NC=$'\033[0m'
 
 # 背景色
-BG_BLUE='\033[44m'
-BG_GREEN='\033[42m'
-BG_RED='\033[41m'
+BG_BLUE=$'\033[44m'
+BG_GREEN=$'\033[42m'
+BG_RED=$'\033[41m'
 
 # ================================ 配置变量 ================================
 CONFIG_DIR="$HOME/.openclaw"
@@ -146,15 +146,15 @@ run_command_with_heartbeat() {
 
     if [ "$timeout_seconds" -gt 0 ] && command -v timeout &> /dev/null; then
         if [ -n "$log_file" ]; then
-            timeout "$timeout_seconds" bash -lc "$cmd" >"$log_file" 2>&1 &
+            timeout "$timeout_seconds" bash -lc "$cmd" </dev/null >"$log_file" 2>&1 &
         else
-            timeout "$timeout_seconds" bash -lc "$cmd" &
+            timeout "$timeout_seconds" bash -lc "$cmd" </dev/null &
         fi
     else
         if [ -n "$log_file" ]; then
-            bash -lc "$cmd" >"$log_file" 2>&1 &
+            bash -lc "$cmd" </dev/null >"$log_file" 2>&1 &
         else
-            bash -lc "$cmd" &
+            bash -lc "$cmd" </dev/null &
         fi
     fi
 
@@ -3410,41 +3410,51 @@ save_feishu_config() {
     
     echo -e "${YELLOW}添加飞书渠道...${NC}"
     
-    # 使用 openclaw channels add 添加飞书渠道
-    local add_output
-    add_output=$(openclaw channels add --channel feishu 2>&1)
-    local add_exit=$?
-    
-    # 过滤掉 openclaw banner，只显示关键信息
-    echo "$add_output" | grep -v "^🦞" | grep -v "^$" | head -3
-    
-    if [ $add_exit -ne 0 ]; then
-        log_warn "飞书渠道可能已存在，继续配置..."
-    fi
+    # 关键修复：
+    # openclaw channels add --channel feishu 在部分环境会进入隐藏交互，导致需要反复按回车。
+    # 这里直接写 channels.feishu.* 配置，完全无交互，避免“卡住/多次回车”。
+    log_info "跳过 channels add（避免交互卡住），直接写入 channels.feishu 配置"
     
     # 使用 openclaw config set 设置凭证
     echo -e "${YELLOW}配置 App ID...${NC}"
     local set_output
-    set_output=$(openclaw config set channels.feishu.appId "$app_id" 2>&1)
-    local set_exit=$?
-    
+    local set_exit
+    local appid_log="/tmp/openclaw-feishu-set-appid.log"
+    local set_appid_cmd=""
+    printf -v set_appid_cmd 'openclaw config set channels.feishu.appId %q' "$app_id"
+    if run_command_with_heartbeat "写入飞书 App ID（最长 15 秒）" "$set_appid_cmd" "$appid_log" 15; then
+        set_output=$(cat "$appid_log" 2>/dev/null || true)
+        set_exit=0
+    else
+        set_output=$(cat "$appid_log" 2>/dev/null || true)
+        set_exit=1
+    fi
+
     if [ $set_exit -ne 0 ]; then
-        echo "$set_output" | grep -v "^🦞" | grep -v "^$"
+        echo "$set_output" | grep -v "^🦞" | grep -v "^$" || true
         log_error "设置 App ID 失败"
         return 1
     fi
-    echo "$set_output" | grep -v "^🦞" | grep -v "^$" | head -1
+    echo "$set_output" | grep -v "^🦞" | grep -v "^$" | head -1 || true
     
     echo -e "${YELLOW}配置 App Secret...${NC}"
-    set_output=$(openclaw config set channels.feishu.appSecret "$app_secret" 2>&1)
-    set_exit=$?
-    
+    local appsecret_log="/tmp/openclaw-feishu-set-appsecret.log"
+    local set_appsecret_cmd=""
+    printf -v set_appsecret_cmd 'openclaw config set channels.feishu.appSecret %q' "$app_secret"
+    if run_command_with_heartbeat "写入飞书 App Secret（最长 15 秒）" "$set_appsecret_cmd" "$appsecret_log" 15; then
+        set_output=$(cat "$appsecret_log" 2>/dev/null || true)
+        set_exit=0
+    else
+        set_output=$(cat "$appsecret_log" 2>/dev/null || true)
+        set_exit=1
+    fi
+
     if [ $set_exit -ne 0 ]; then
-        echo "$set_output" | grep -v "^🦞" | grep -v "^$"
+        echo "$set_output" | grep -v "^🦞" | grep -v "^$" || true
         log_error "设置 App Secret 失败"
         return 1
     fi
-    echo "$set_output" | grep -v "^🦞" | grep -v "^$" | head -1
+    echo "$set_output" | grep -v "^🦞" | grep -v "^$" | head -1 || true
     
     # 设置其他默认配置
     openclaw config set channels.feishu.enabled true > /dev/null 2>&1 || true
